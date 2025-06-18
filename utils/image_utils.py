@@ -10,7 +10,6 @@
 #
 
 import torch
-import cv2
 
 import numpy as np
 import matplotlib.pyplot as plt
@@ -84,13 +83,16 @@ def convert_depth_for_save(depth_map, max_depth=None):
 
 def convert_normal_for_save(normal_map, viewpoint):
     # normal_map is a tensor of shape (3, H, W)
-    # Flatten normals
+
+    # Flatten and normalize normals
     normals = normal_map.permute(1, 2, 0).view(-1, 3) # @ viewpoint.world_view_transform[:3, :3] # (H * W, 3)
+    normals = torch.nn.functional.normalize(normals, dim=1, p=2)
 
     # Apply Y-up and Z-back coordinate fix
     T = torch.tensor([[1, 0, 0], [0, -1, 0], [0, 0, -1]], dtype=normals.dtype, device=normals.device)
     normals = normals @ T.T # (H * W, 3)
 
+    # Adjust range
     normals = normals * 0.5 + 0.5 # [-1, 1] -> [0, 1]
     H, W = viewpoint.image_height, viewpoint.image_width
     return normals.reshape(H, W, 3).permute(2, 0, 1)
