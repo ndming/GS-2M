@@ -1,0 +1,31 @@
+name: dgsr
+channels:
+  - pytorch
+  - nvidia/label/cuda-11.8.0
+  - conda-forge
+  - defaults
+dependencies:
+  - cuda-toolkit=11.8
+  - mkl=2024.0.0
+  - numpy=1.23.5
+  - plyfile
+  - python=3.9
+  - pip=22.3.1
+  - pytorch=2.0.1
+  - pytorch-cuda=11.8
+  - torchaudio=2.0.2
+  - torchvision=0.15.2
+  - tqdm
+  - pip:
+      - submodules/diff-gaussian-rasterization
+      - submodules/nvdiffrast
+      - submodules/render-utils
+      - submodules/simple-knn
+      - submodules/fused-ssim
+      - open3d==0.18.0
+      - opencv-python
+      - kornia
+      - matplotlib
+      - scikit-image # for DTU evaluation
+      - scikit-learn # for DTU evaluation
+      - trimesh      # for DTU evaluation

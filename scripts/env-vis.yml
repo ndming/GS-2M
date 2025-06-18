@@ -1,0 +1,15 @@
+name: visual
+channels:
+  - pytorch
+  - conda-forge
+  - defaults
+dependencies:
+  - ipykernel
+  - numpy=1.23.5
+  - matplotlib
+  - python=3.11
+  - pytorch
+  - tqdm
+  - pip:
+      - bpy
+      - mathutils
