@@ -88,7 +88,7 @@ def render_views(
 
         normals = render_pkg["normal_map"].permute(1, 2, 0).reshape(-1, 3) # (H * W, 3)
         normals = normals @ c2w.T # (H * W, 3)
-        normal_map = normals.reshape(H, W, 3) # (H, W, 3)
+        normal_map = normals.reshape(H, W, 3).permute(2, 0, 1) # (3, H, W)
         normal_map = torch.where(
             torch.norm(normal_map, dim=0, keepdim=True) > 0,
             F.normalize(normal_map, dim=0, p=2), normal_map)
@@ -101,7 +101,7 @@ def render_views(
 
         pbr_pkg = pbr_shading(
             light=scene.cubemap,
-            normals=normal_map,
+            normals=normal_map.permute(1, 2, 0), # (H, W, 3)
             view_dirs=view_dirs,
             mask=normal_mask.permute(1, 2, 0), # (H, W, 1)
             albedo=albedo_map.permute(1, 2, 0), # (H, W, 3)
