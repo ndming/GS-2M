@@ -93,7 +93,7 @@ def render(
     features[:, 5:8] = albedo
     features[:, 8:9] = roughness
     features[:, 9:10] = metallic
-    features[:, 10] = 0 # normal_deltas.norm(dim=1)
+    features[:, 10] = normal_deltas.norm(dim=1)
 
     raster_settings = GaussianRasterizationSettings(
         image_height=int(viewpoint_camera.image_height),

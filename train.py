@@ -104,16 +104,18 @@ def train(model, opt, pipe, test_iterations, save_iterations, checkpoint_iterati
             lambda_nd = opt.lambda_normal_depth
             Lnd = normal_depth_loss(render_pkg["normal_map"], render_pkg["sobel_normal_map"], gt_image)
 
-            # lambda_tv = opt.lambda_tv_normal
-            # Ltv = tv_loss(gt_image, render_pkg["normal_map"])
+            lambda_tv = opt.lambda_tv_normal
+            n_map = render_pkg["normal_map"] # (3, H, W)
+            n_map = torch.where(torch.norm(n_map, dim=0, keepdim=True) > 0, F.normalize(n_map, dim=0, p=2), n_map)
+            Ltv = tv_loss(gt_image, n_map)
 
-            # lambda_dn = opt.lambda_delta_normal
-            # Ldn = delta_normal_loss(render_pkg["dn_norm_map"], render_pkg["alpha_map"])
+            lambda_dn = opt.lambda_delta_normal
+            Ldn = delta_normal_loss(render_pkg["dn_norm_map"], render_pkg["alpha_map"])
 
             lambda_mv = opt.lambda_multi_view # expensive, only call if needed
             Lmv = 0.0 if lambda_mv == 0.0 else multi_view_loss(scene, viewpoint_cam, opt, render_pkg, pipe, background)
 
-            Lgeo = lambda_nd * Lnd + lambda_mv * Lmv # + lambda_dn * Ldn # + lambda_tv * Ltv
+            Lgeo = lambda_nd * Lnd + lambda_mv * Lmv + lambda_dn * Ldn + lambda_tv * Ltv
             loss += Lgeo
 
         # Material losses
