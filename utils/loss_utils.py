@@ -168,7 +168,7 @@ def multi_view_loss(scene, viewpoint_cam, opt, render_pkg, pipe, bg_color):
     angle_valid = valid & (angle_error_rad < angle_threshold)
     angle_noise = opt.mv_angle_factor * angle_error_rad
 
-    pixel_valid = valid & (pixel_noise < 1.0)
+    pixel_valid = valid # & (pixel_noise < 1.0)
     weights = torch.exp(-pixel_noise * opt.mv_pixel_weight_decay).detach()
     weights[~pixel_valid] = 0
 

@@ -130,7 +130,7 @@ class OptimizationParams(ParamGroup):
         self.mv_angle_threshold = 30
         self.mv_angle_factor = 1.0
         self.mv_occlusion_threshold = 5e-4
-        self.mv_pixel_weight_decay = 1.0
+        self.mv_pixel_weight_decay = 3.0
         self.lambda_multi_view = 1.0
 
         super().__init__(parser, "Optimization Parameters")
