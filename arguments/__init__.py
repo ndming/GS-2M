@@ -121,7 +121,7 @@ class OptimizationParams(ParamGroup):
         self.multi_view_sample_num = 102400
         self.multi_view_patch_size = 3
         # GS-IR/GS-ROR
-        self.lambda_tv_normal = 0.5
+        self.lambda_tv_normal = 0.1
         self.lambda_tv_smooth = 0.01
         self.lambda_tv_envmap = 0.01
         # Ours
