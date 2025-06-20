@@ -21,7 +21,7 @@ all the great research and publicly available code that made this possible.
 - High-quality surface reconstruction: [PGSR](https://zju3dv.github.io/pgsr/)
 - Improved densification: [AbsGS](https://ty424.github.io/AbsGS.github.io/)
 - Material decomposition: [GS-IR](https://lzhnb.github.io/project-pages/gs-ir.html) and [GS-ROR2](https://arxiv.org/abs/2406.18544)
-- Normal formulation: [GaussianShader](https://asparagus15.github.io/GaussianShader.github.io/)
+- Depth-normal rendering: [GaussianShader](https://asparagus15.github.io/GaussianShader.github.io/)
 - Deferred reflection: [3DGS-DR](https://gapszju.github.io/3DGS-DR/)
 - Preprocessed DTU dataset: [2DGS](https://surfsplatting.github.io/)
 - Preprocessed TnT dataset: [GOF](https://niujinshuchong.github.io/gaussian-opacity-fields/)
