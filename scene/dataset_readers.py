@@ -30,7 +30,8 @@ class CameraInfo(NamedTuple):
     uid: int
     R: np.array
     T: np.array
-    K: np.array # intrinsic matrix
+    Fx: np.array
+    Fy: np.array
     image_name: str
     image_path: str
     image: Image.Image # image in original size, preprocessed if --white_background is set
@@ -83,26 +84,10 @@ def readColmapCameras(cam_extrinsics, cam_intrinsics, image_dir, mask_dir, depth
 
         if intr.model=="SIMPLE_PINHOLE":
             focal_length_x = intr.params[0]
-            K = np.array([
-                [focal_length_x, 0, intr.params[1]],
-                [0, focal_length_x, intr.params[2]],
-                [0, 0, 1],
-            ])
+            focal_length_y = focal_length_x
         elif intr.model=="PINHOLE":
             focal_length_x = intr.params[0]
             focal_length_y = intr.params[1]
-            K = np.array([
-                [focal_length_x, 0, intr.params[2]],
-                [0, focal_length_y, intr.params[3]],
-                [0, 0, 1],
-            ])
-        elif intr.model=="SIMPLE_RADIAL":
-            focal_length_x = intr.params[0]
-            K = np.array([
-                [focal_length_x, 0, intr.params[1]],
-                [0, focal_length_x, intr.params[2]],
-                [0, 0, 1],
-            ])
         else:
             assert False, "Unsupported COLMAP camera model!"
 
@@ -115,9 +100,6 @@ def readColmapCameras(cam_extrinsics, cam_intrinsics, image_dir, mask_dir, depth
             bg_color = np.array([1, 1, 1])
             image = convert_background_color(image, bg_color)
 
-        # real_im_scale = image.size[0] / width
-        # K[:2] *= real_im_scale
-
         mask_path  = os.path.join(mask_dir,  f"{image_stem}.png") if mask_dir  != "" else ""
         depth_path = os.path.join(depth_dir, f"{image_stem}.png") if depth_dir != "" else ""
 
@@ -125,7 +107,7 @@ def readColmapCameras(cam_extrinsics, cam_intrinsics, image_dir, mask_dir, depth
         depth = Image.open(depth_path) if depth_path != "" else None
 
         cam_info = CameraInfo(
-            uid=uid, R=R, T=T, K=K, image_name=image_name, image_path=image_path,
+            uid=uid, R=R, T=T, Fx=focal_length_x, Fy=focal_length_y, image_name=image_name, image_path=image_path,
             image=image, mask=mask, depth=depth, width=width, height=height)
         cam_infos.append(cam_info)
     return cam_infos
@@ -241,21 +223,15 @@ def readCamerasFromTransforms(path, transformsfile, depth_dir, white_background,
             pil_image = Image.open(image_path)
             bg_color = np.array([1, 1, 1]) if white_background else np.array([0, 0, 0])
             image = convert_background_color(pil_image, bg_color)
-
             focal = fov2focal(fovx, image.size[0])
-            w, h = image.size[0], image.size[1]
-            K = np.array([
-                [focal, 0, w/2],
-                [0, focal, h/2],
-                [0, 0, 1],
-            ])
 
             depth_path = os.path.join(depth_dir, f"{image_stem}.png") if depth_dir != "" else ""
             depth = Image.open(depth_path) if depth_path != "" else None
 
-            cam_infos.append(
-                CameraInfo(uid=idx, R=R, T=T, K=K, image=image, image_name=image_name, image_path=image_path,
-                mask=None, depth=depth, width=image.size[0], height=image.size[1]))
+            cam_info = CameraInfo(
+                uid=idx, R=R, T=T, Fx=focal, Fy=focal, image=image, image_name=image_name, image_path=image_path,
+                mask=None, depth=depth, width=image.size[0], height=image.size[1])
+            cam_infos.append(cam_info)
 
     return cam_infos
 

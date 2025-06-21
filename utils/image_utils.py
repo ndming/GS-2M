@@ -10,6 +10,7 @@
 #
 
 import torch
+import torch.nn.functional as F
 
 import numpy as np
 import matplotlib.pyplot as plt
@@ -22,6 +23,16 @@ def psnr(img1, img2):
     mse = (((img1 - img2)) ** 2).view(img1.shape[0], -1).mean(1, keepdim=True)
     return 20 * torch.log10(1.0 / torch.sqrt(mse))
 
+def dilate(bin_img, ksize=5):
+    pad = (ksize - 1) // 2
+    bin_img = F.pad(bin_img, pad=[pad, pad, pad, pad], mode='reflect')
+    out = F.max_pool2d(bin_img, kernel_size=ksize, stride=1, padding=0)
+    return out
+
+def erode(bin_img, ksize=5):
+    out = 1 - dilate(1 - bin_img, ksize)
+    return out
+
 def convert_background_color(image: Image.Image, bg_color):
     im_data = np.array(image.convert("RGBA"))
     norm_data = im_data / 255.0
@@ -29,7 +40,7 @@ def convert_background_color(image: Image.Image, bg_color):
     converted_image = Image.fromarray(np.array(arr * 255.0, dtype=np.byte), "RGB")
     return converted_image
 
-def process_input_image(pil_image: Image.Image, resolution, use_mask=False, pil_mask=None):
+def process_input_image(pil_image: Image.Image, resolution, mask_gt=False, pil_mask=None):
     image = pil_image
     alpha = pil_mask
 
@@ -39,9 +50,9 @@ def process_input_image(pil_image: Image.Image, resolution, use_mask=False, pil_
         alpha = a if alpha is None else alpha # prioritize provided mask over alpha channel
 
     # Mask GT images before resizing
-    if use_mask and alpha is not None:
-        image_np = np.array(image)[..., :3]
-        alpha_np = np.expand_dims(np.array(alpha), axis=-1)
+    if mask_gt and alpha is not None:
+        image_np = np.array(image)[..., :3].astype(np.float32)
+        alpha_np = np.expand_dims(np.array(alpha), axis=-1).astype(np.float32)
         rgb_masked = (image_np / 255.) * (alpha_np / np.max(alpha_np))
         rgb_masked = np.clip(rgb_masked, 0., 1.)
         image = Image.fromarray((rgb_masked * 255.).astype(np.uint8))
@@ -54,7 +65,7 @@ def process_input_image(pil_image: Image.Image, resolution, use_mask=False, pil_
 
     if alpha is not None:
         alpha = alpha.resize(resolution)
-        alpha = torch.from_numpy(np.array(alpha))
+        alpha = torch.from_numpy(np.array(alpha)).float()
         alpha = alpha / torch.max(alpha)
         alpha = alpha.unsqueeze(dim=-1).permute(2, 0, 1)
 

@@ -17,6 +17,7 @@ import torch
 import numpy as np
 import torch.nn.functional as F
 
+from PIL import Image
 from pathlib import Path
 from arguments import ModelParams
 from scene.dataset_readers import sceneLoadTypeCallbacks
@@ -26,6 +27,7 @@ from pbr import CubemapLight, get_brdf_lut
 from utils.graphics_utils import get_envmap_dirs
 from utils.system_utils import searchForMaxIteration
 from utils.camera_utils import cameraList_from_camInfos, camera_to_JSON
+from utils.image_utils import process_input_image
 
 class Scene:
     gaussians : GaussianModel
@@ -118,9 +120,12 @@ class Scene:
     def getTestCameras(self, scale=1.0):
         return self.test_cameras[scale]
 
-    def training_setup(self, opt, resolution_scale=1.0):
-        print("[>] Populating nearest camera neighbors")
+    def training_setup(self, opt, mask_gt=False, resolution_scale=1.0):
+        print("[>] Populating camera neighbors")
         self._populate_neareast_cameras(opt, resolution_scale)
+
+        print("[>] Populating gray images")
+        self._populate_gray_images(mask_gt, opt.multi_view_ncc_scale, resolution_scale)
 
         self.cubemap.train()
         param_groups = [
@@ -156,6 +161,18 @@ class Scene:
             multi_view_num = min(opt.multi_view_num, len(sorted_indices))
             for index in sorted_indices[:multi_view_num]:
                 cur_cam.nearest_indices.append(index)
+
+    def _populate_gray_images(self, mask_gt, ncc_scale, resolution_scale):
+        for cam in self.train_cameras[resolution_scale]:
+            rgb = cam.gt_image
+            if ncc_scale != 1.0:
+                pil_image = Image.open(cam.image_path)
+                pil_mask = None if cam.mask_path is None else Image.open(cam.mask_path).convert("L")
+                res = int(cam.image_width / ncc_scale), int(cam.image_height / ncc_scale)
+                rgb, _ = process_input_image(pil_image, res, mask_gt, pil_mask) # (C, H, W)
+                rgb = rgb[:3, ...].to(cam.data_device)
+            gray = rgb[0:1, ...] * 0.299 + rgb[1:2, ...] * 0.587 + rgb[2:3, ...] * 0.114 # (1, H, W)
+            cam.gray_image = gray.to(cam.data_device)
 
     def get_canonical_rays(self, resolution_scale=1.0) -> torch.Tensor:
         ref_camera = self.train_cameras[resolution_scale][0]

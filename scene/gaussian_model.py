@@ -163,7 +163,7 @@ class GaussianModel:
         idx = torch.where(~flip_mask, 0, 1).long()[:, None, None].repeat(1, 3, 1)
         deltas = torch.gather(self._delta_normal, index=idx, dim=-1).squeeze(-1) # (N, 3)
 
-        normals += deltas
+        # normals += deltas
         normals = normals / normals.norm(dim=1, keepdim=True)
 
         if return_deltas:

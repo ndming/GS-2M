@@ -17,10 +17,10 @@ from tqdm import tqdm
 WARNED = False
 
 def loadCam(args, cam_info, resolution_scale):
-    orig_w, orig_h = cam_info.image.size
-    FovY = focal2fov(cam_info.K[1, 1], orig_h)
-    FovX = focal2fov(cam_info.K[0, 0], orig_w)
+    FovY = focal2fov(cam_info.Fy, cam_info.height)
+    FovX = focal2fov(cam_info.Fx, cam_info.width)
 
+    orig_w, orig_h = cam_info.image.size
     if args.resolution in [1, 2, 4, 8]:
         scale = resolution_scale * args.resolution
         resolution = round(orig_w / scale), round(orig_h/ scale)
@@ -41,13 +41,10 @@ def loadCam(args, cam_info, resolution_scale):
         scale = float(global_down) * float(resolution_scale)
         resolution = (int(orig_w / scale), int(orig_h / scale))
 
-    K_scaled = cam_info.K.copy()
-    K_scaled[:2] = K_scaled[:2] / scale
-
     return Camera(
-        uid=cam_info.uid, R=cam_info.R, T=cam_info.T, K=K_scaled, FoVx=FovX, FoVy=FovY,
+        uid=cam_info.uid, R=cam_info.R, T=cam_info.T, FoVx=FovX, FoVy=FovY,
         image_name=cam_info.image_name, resolution=resolution,
-        image=cam_info.image, mask=cam_info.mask, use_mask=args.use_mask,
+        image=cam_info.image, mask=cam_info.mask, mask_gt=args.mask_gt,
         depth=cam_info.depth, data_device=args.data_device)
 
 def cameraList_from_camInfos(cam_infos, resolution_scale, args, is_test_cams):
@@ -81,7 +78,7 @@ def camera_to_JSON(id, camera: Camera):
         'height' : camera.height,
         'position': pos.tolist(),
         'rotation': serializable_array_2d,
-        'fy' : camera.K[1, 1],
-        'fx' : camera.K[0, 0]
+        'fy' : camera.Fy,
+        'fx' : camera.Fx,
     }
     return camera_entry

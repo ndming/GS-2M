@@ -21,6 +21,7 @@ from torch.autograd import Variable
 from math import exp
 
 from gaussian_renderer import render
+from utils.image_utils import erode
 
 def l1_loss(network_output, gt):
     return torch.abs((network_output - gt)).mean()
@@ -90,7 +91,7 @@ def delta_normal_loss(dn_norm_map, alpha_map):
     weight = alpha_map.detach().cpu().numpy()[0]  # (H, W)
     weight = (weight * 255).astype(np.uint8)
 
-    weight = _erode(weight, erode_size=4)  # Output: (H, W), dtype=uint8
+    weight = _erode_cv(weight, erode_size=4)  # Output: (H, W), dtype=uint8
 
     weight = torch.from_numpy(weight.astype(np.float32) / 255.0)  # (H, W)
     weight = weight[None, ...].to(device)  # (1, H, W)
@@ -102,16 +103,17 @@ def delta_normal_loss(dn_norm_map, alpha_map):
 
     return loss
 
-def _erode(img_in, erode_size=4):
+def _erode_cv(img_in, erode_size=4):
     img_out = np.copy(img_in)
     kernel = np.ones((erode_size, erode_size), np.uint8)
     img_out = cv2.erode(img_out, kernel, iterations=1)
 
     return img_out
 
-def normal_depth_loss(normal_map, sobel_normal_map, gt_image):
+def depth_normal_loss(normal_map, sobel_normal_map, gt_image):
     # normal_map, sobel_normal_map, gt_image: (3, H, W)
     image_weight = (1.0 - _get_img_grad_weight(gt_image)).clamp(0, 1).detach() ** 2
+    # image_weight = erode(image_weight[None, None], ksize=5).squeeze()
     loss = (image_weight * (sobel_normal_map - normal_map).abs().sum(dim=0)).mean()
     return loss
 
@@ -126,7 +128,7 @@ def _get_img_grad_weight(img):
     grad_img = torch.cat((grad_img_x, grad_img_y), dim=0)
     grad_img, _ = torch.max(grad_img, dim=0)
     grad_img = (grad_img - grad_img.min()) / (grad_img.max() - grad_img.min())
-    grad_img = torch.nn.functional.pad(grad_img[None,None], (1,1,1,1), mode='constant', value=1.0).squeeze()
+    grad_img = torch.nn.functional.pad(grad_img[None, None], (1, 1, 1, 1), mode='constant', value=1.0).squeeze()
     return grad_img
 
 def multi_view_loss(scene, viewpoint_cam, opt, render_pkg, pipe, bg_color):
@@ -191,7 +193,7 @@ def multi_view_loss(scene, viewpoint_cam, opt, render_pkg, pipe, bg_color):
         offsets = _patch_offsets(opt.multi_view_patch_size, pixels.device)
         ori_pixels_patch = pixels.reshape(-1, 1, 2) / ncc_scale + offsets.float()
 
-        gt_image_gray = viewpoint_cam.get_gray_image(ncc_scale)
+        gt_image_gray = viewpoint_cam.gray_image
         h, w = gt_image_gray.squeeze().shape
         pixels_patch = ori_pixels_patch.clone()
         pixels_patch[:, :, 0] = 2 * pixels_patch[:, :, 0] / (w - 1) - 1.0
@@ -217,7 +219,7 @@ def multi_view_loss(scene, viewpoint_cam, opt, render_pkg, pipe, bg_color):
     grid = _patch_warp(H_rn.reshape(-1, 3, 3), ori_pixels_patch)
     grid[:, :, 0] = 2 * grid[:, :, 0] / (w - 1) - 1.0
     grid[:, :, 1] = 2 * grid[:, :, 1] / (h - 1) - 1.0
-    nearest_image_gray = nearest_cam.get_gray_image(ncc_scale)
+    nearest_image_gray = nearest_cam.gray_image
     sampled_gray_val = F.grid_sample(nearest_image_gray[None], grid.reshape(1, -1, 1, 2), align_corners=True)
     sampled_gray_val = sampled_gray_val.reshape(-1, total_patch_size)
 
@@ -341,7 +343,7 @@ def _patch_offsets(h_patch_size, device):
 def _patch_warp(H, uv):
     B, P = uv.shape[:2]
     H = H.view(B, 3, 3)
-    ones = torch.ones((B,P,1), device=uv.device)
+    ones = torch.ones((B, P, 1), device=uv.device)
     homo_uv = torch.cat((uv, ones), dim=-1)
 
     grid_tmp = torch.einsum("bik,bpk->bpi", H, homo_uv)
@@ -385,6 +387,73 @@ def _loss_ncc(ref, nea):
     ncc = torch.mean(ncc, dim=1, keepdim=True)
     mask = (ncc < 0.9)
     return ncc, mask
+
+def _bilateral_weighted_ncc(ref, nea, sigma_g=0.1, sigma_x=1.0):
+    """
+    Bilaterally weighted NCC following Schönberger et al. ECCV 2016.
+    
+    Args:
+        ref: reference patches [batch_size, total_patch_size]
+        nea: nearby patches [batch_size, total_patch_size] 
+        sigma_g: grayscale variance parameter (σ_g)
+        sigma_x: spatial variance parameter (σ_x)
+    """
+    bs, tps = nea.shape
+    patch_size = int(np.sqrt(tps))
+    
+    # Reshape to patch format
+    ref = ref.view(bs, patch_size, patch_size)
+    nea = nea.view(bs, patch_size, patch_size)
+    
+    # Create spatial coordinates for Δx_i calculation
+    y_coords, x_coords = torch.meshgrid(
+        torch.arange(patch_size, device=ref.device, dtype=torch.float),
+        torch.arange(patch_size, device=ref.device, dtype=torch.float),
+        indexing='ij'
+    )
+    center = patch_size // 2
+    
+    ncc_values = []
+    
+    for b in range(bs):
+        ref_patch = ref[b]  # w_l in paper notation
+        nea_patch = nea[b]  # w_l^m in paper notation
+        
+        # Center pixel grayscale values (g_l)
+        ref_center = ref_patch[center, center]
+        
+        # Compute Δg_i = |g_i - g_l| (grayscale color distance)
+        delta_g = torch.abs(ref_patch - ref_center)
+        
+        # Compute Δx_i = ||x_i - x_l|| (spatial distance)
+        delta_x = torch.sqrt((x_coords - center)**2 + (y_coords - center)**2)
+        
+        # Per-pixel weights: w_i = exp(-Δg_i²/2σ_g² - Δx_i²/2σ_x²)
+        w = torch.exp(-(delta_g**2)/(2*sigma_g**2) - (delta_x**2)/(2*sigma_x**2))
+        
+        # Weighted averages: E_w(x) = Σ_i w_i x_i / Σ_i w_i
+        w_sum = torch.sum(w)
+        ref_mean = torch.sum(w * ref_patch) / w_sum  # E_w(w_l)
+        nea_mean = torch.sum(w * nea_patch) / w_sum  # E_w(w_l^m)
+        
+        # Weighted covariances following paper's definition
+        # cov_w(x, y) = E_w((x - E_w(x))(y - E_w(y)))
+        ref_centered = ref_patch - ref_mean
+        nea_centered = nea_patch - nea_mean
+        
+        # Cross-covariance: cov_w(w_l, w_l^m)
+        cross_cov = torch.sum(w * ref_centered * nea_centered) / w_sum
+        
+        # Auto-covariances: cov_w(w_l, w_l) and cov_w(w_l^m, w_l^m)
+        ref_var = torch.sum(w * ref_centered * ref_centered) / w_sum
+        nea_var = torch.sum(w * nea_centered * nea_centered) / w_sum
+        
+        # Bilaterally weighted NCC (Equation 9 in paper):
+        # ρ_l^m = cov_w(w_l, w_l^m) / sqrt(cov_w(w_l, w_l) * cov_w(w_l^m, w_l^m))
+        ncc = cross_cov / (torch.sqrt(ref_var * nea_var) + 1e-8)
+        ncc_values.append(ncc)
+    
+    return torch.stack(ncc_values).view(bs, 1)
 
 def tv_loss(gt_image: torch.Tensor, prediction: torch.Tensor, pad=1, step=1):
     # gt_image: (3, H, W), prediction: (C, H, W)

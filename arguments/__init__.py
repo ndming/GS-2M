@@ -58,9 +58,9 @@ class ModelParams(ParamGroup):
         self.gamma = False
         self.metallic = False
         # Ours
+        self.mask_gt = False # whether to mask GT images during training
         self.masks = "" # foreground masks directory name, empty if not used
         self.depths = "" # depths directory name, empty if not used
-        self.use_mask = False # whether to mask the GT images during training
         super().__init__(parser, "Loading Parameters", sentinel)
 
     def extract(self, args):
@@ -108,7 +108,7 @@ class OptimizationParams(ParamGroup):
         self.lambda_delta_normal = 0.001
         # PGSR
         self.lambda_planar = 100.0
-        self.lambda_normal_depth = 0.015
+        self.lambda_depth_normal = 0.015
         self.multi_view_num = 8
         self.multi_view_ncc_weight = 0.15
         self.multi_view_geo_weight = 0.03

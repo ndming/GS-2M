@@ -43,14 +43,17 @@ def fuse_depths(tsdf_depths, views, render_dir, max_depth, voxel_size, sdf_trunc
     # tsdf_depths is a (N, H, W) tensor
     for idx, view in enumerate(tqdm(views, desc="[>] TSDF Fusion", ncols=80)):
         ref_depth = tsdf_depths[idx].cuda() # (H, W)
-        h, w = ref_depth.shape
-        ref_depth[view.alpha_mask.squeeze() < 0.5] = 0
 
-        ref_depth[ref_depth > max_depth] = 0
+        if view.clear_mask is not None:
+            ref_depth[view.clear_mask] = 0
+        else:
+            ref_depth[view.alpha_mask.squeeze() < 0.5] = 0
+            ref_depth[ref_depth > max_depth] = 0
+
         ref_depth = ref_depth.cpu().numpy()
 
         pose = np.identity(4)
-        pose[:3,:3] = view.R.transpose(-1,-2)
+        pose[:3,:3] = view.R.transpose(-1, -2)
         pose[:3, 3] = view.T
 
         image_stem = view.image_name.rsplit('.', 1)[0]
@@ -59,7 +62,8 @@ def fuse_depths(tsdf_depths, views, render_dir, max_depth, voxel_size, sdf_trunc
 
         rgbd = o3d.geometry.RGBDImage.create_from_color_and_depth(
             color, depth, depth_scale=1000., depth_trunc=max_depth, convert_rgb_to_intensity=False)
-        
+
+        h, w = ref_depth.shape
         intrinsic = o3d.camera.PinholeCameraIntrinsic(w, h, view.Fx, view.Fy, view.Cx, view.Cy)
         volume.integrate(rgbd, intrinsic, pose)
 

@@ -11,21 +11,21 @@
 
 import torch
 import numpy as np
+import torch.nn.functional as F
 
 from utils.graphics_utils import getWorld2View2, getProjectionMatrix, fov2focal
-from utils.image_utils import process_input_image
+from utils.image_utils import process_input_image, erode
 
 class Camera(torch.nn.Module):
     def __init__(
-            self, uid, R, T, K, FoVx, FoVy, image_name, resolution,
-            image, mask, use_mask, depth,
+            self, uid, R, T, FoVx, FoVy, image_name, resolution,
+            image, mask, mask_gt, depth,
             trans=np.array([0.0, 0.0, 0.0]), scale=1.0, data_device="cuda"):
         super(Camera, self).__init__()
 
         self.uid = uid
         self.R = R # transposed rotation in w2c (basically c2w rotation)
         self.T = T # translation in w2c
-        self.K = K # corrected intrinsic matrix scaled to resolution
         self.nearest_indices = [] # nearest neighbors indices for this camera, populated by Scene
         self.image_name = image_name # name with suffix
         self.image_width  = resolution[0]
@@ -36,7 +36,9 @@ class Camera(torch.nn.Module):
         self.Fy = fov2focal(FoVy, self.image_height)
         self.Cx = 0.5 * self.image_width
         self.Cy = 0.5 * self.image_height
-        self.gray_images = {} # cached grayscale GT at each scale 
+        self.image_path = image.filename
+        self.depth_path = None if depth is None else depth.filename
+        self.mask_path = None if mask is None else mask.filename
 
         try:
             self.data_device = torch.device(data_device)
@@ -45,16 +47,23 @@ class Camera(torch.nn.Module):
             print(f"[Warning] Custom device {data_device} failed, fallback to default cuda device" )
             self.data_device = torch.device("cuda")
 
-        # Get the resized GT and mask images. If use_mask is True, GT is masked and resized. The provided mask
+        # Get the resized GT and mask images. If mask_gt is True, GT is masked and resized. The provided mask
         # can be None, in which case the alpha channel of the image is used if available.
-        rgb, alpha = process_input_image(image, resolution, use_mask, mask) # resize and transpose to (C, H, W)
+        pil_mask = None if mask is None else mask.convert("L")
+        rgb, alpha = process_input_image(image, resolution, mask_gt, pil_mask) # resize and transpose to (C, H, W)
         self.gt_image = rgb[:3, ...].to(self.data_device)
         self.alpha_mask = alpha if alpha is not None else torch.ones_like(rgb[0:1, ...])
         self.alpha_mask = self.alpha_mask.to(self.data_device)
+        self.gray_image = None # only create during training
 
-        self.pil_image = image
-        self.use_mask = use_mask
-        self.pil_mask = mask
+        # If mask is provided, process it for mesh TSDF fusion
+        if pil_mask is not None:
+            self.clear_mask = torch.tensor(np.array(pil_mask), dtype=torch.float32, device=self.data_device) / 255.0
+            self.clear_mask = erode(self.clear_mask[None, None], ksize=12)
+            self.clear_mask = F.interpolate(
+                self.clear_mask, size=(self.image_height, self.image_width),
+                mode='bilinear', align_corners=False).squeeze() # (H, W)
+            self.clear_mask = (self.clear_mask < 0.5).to(self.data_device)
 
         self.zfar = 100.0
         self.znear = 0.01
@@ -79,23 +88,12 @@ class Camera(torch.nn.Module):
         return rays
 
     def get_calib_matrix_nerf(self, scale=1.0):
-        intrinsic_matrix = torch.tensor([[self.Fx/scale, 0, self.Cx/scale], [0, self.Fy/scale, self.Cy/scale], [0, 0, 1]]).float()
+        intrinsic_matrix = torch.tensor([
+            [self.Fx / scale, 0, self.Cx / scale],
+            [0, self.Fy / scale, self.Cy / scale],
+            [0, 0, 1]]).float()
         extrinsic_matrix = self.world_view_transform.transpose(0, 1).contiguous() # w2c
         return intrinsic_matrix, extrinsic_matrix
-    
-    def get_gray_image(self, scale=1.0):
-        if scale in self.gray_images:
-            return self.gray_images[scale].cuda()
-        
-        rgb = self.gt_image
-        if scale != 1.0:
-            res = int(self.image_width / scale), int(self.image_height / scale)
-            rgb, _ = process_input_image(self.pil_image, res, self.use_mask, self.pil_mask) # (C, H, W)
-            rgb = rgb[:3, ...].to(self.data_device)
-
-        gray = rgb[0:1, ...] * 0.299 + rgb[1:2, ...] * 0.587 + rgb[2:3, ...] * 0.114 # (1, H, W)
-        self.gray_images[scale] = gray
-        return gray.cuda()
 
     def get_K(self, scale=1.0):
         K = torch.tensor([
