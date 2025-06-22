@@ -23,8 +23,8 @@ conda activate gs2m
 ## Usage
 Please follow [3DGS](https://github.com/graphdeco-inria/gaussian-splatting)'s instruction to prepare training data for your own scene.
 
-A COLMAP-prepared training directory for `GS-2M` may look like the following. Note that `masks` is completely optional,
-but if you have foreground masks of the target object in the scene and want to use them, put them as illustrated below. 
+A COLMAP-prepared training directory for `GS-2M` may look like the following. Note that `masks` is completely optional.
+If you have foreground masks of the target object and want to use them, put them as shown below. 
 ```
 scene/
 ├── images/
@@ -53,10 +53,10 @@ python train.py -s /path/to/scene -m /path/to/model/directory
 
 - `-r`: downscale input images, recommended for high resolution training data (more than 1k6 pixels width/height).
 For example, `-r 2` will train with images at half the resolution of the original. 
-- `--masks`: the name of the directory containing masks of foreground object. For the directory structure illustrated
-above, the option shall be specified as `--masks masks`. Note that, by default, the code will pick up the alpha channel
-of the GT images for foreground masks if the input data is of RGBA format. However, it will prioritize `--masks` over
-the alpha channel if they both co-exist.
+- `--masks`: the name of the directory containing masks of foreground object. For the directory structure shown above,
+the option shall be specified as `--masks masks`. Note that, by default, the code will pick up the alpha channel of the
+GT images for foreground masks if they are RGBA. However, training will prioritize `--masks` over alpha channel if
+they both co-exist.
 - `--mask_gt`: even with `--masks` or the alpha channel from input images, training would still perform with unmasked RGB
 as GT. To mask them out and fit Gaussians to the foreground object only, add this option. This is especially useful for
 reconstructing objects from scenes with overwhelming background.
