@@ -8,11 +8,85 @@ In general, you will need a working C++ compiler to build all CUDA submodules:
 (MSVC `19.39`) as newer versions require CUDA `>=12.4`
 - Linux: a recent version of GCC is sufficient (we tested with `11.4`)
 
+Clone the repo:
+```
+git clone https://github.com/ndming/GS-2M.git
+cd GS-2M
+```
+
 Please use `conda`/`mamba` to manage your local environment:
 ```
 conda env create --file environment.yml
 conda activate gs2m
 ```
+
+## Usage
+Please follow [3DGS](https://github.com/graphdeco-inria/gaussian-splatting)'s instruction to prepare training data for your own scene.
+
+A COLMAP-prepared training directory for `GS-2M` may look like the following. Note that `masks` is completely optional,
+but if you have foreground masks of the target object in the scene and want to use them, put them as illustrated below. 
+```
+scene/
+├── images/
+│   ├── 001.png
+│   ├── 002.png
+│   └── ...
+├── sparse/
+│   └── 0/
+│       ├── cameras.bin
+│       ├── images.bin
+│       └── points3D.bin
+├── masks/
+│   ├── 001.png
+│   ├── 002.png
+│   └── ...
+└── database.db
+```
+
+### Training
+```
+python train.py -s /path/to/scene -m /path/to/model/directory
+```
+
+<details>
+<summary><span style="font-weight: bold;">Additional settings to change the behavior of train.py</span></summary>
+
+- `-r`: downscale input images, recommended for high resolution training data (more than 1k6 pixels width/height).
+For example, `-r 2` will train with images at half the resolution of the original. 
+- `--masks`: the name of the directory containing masks of foreground object. For the directory structure illustrated
+above, the option shall be specified as `--masks masks`. Note that, by default, the code will pick up the alpha channel
+of the GT images for foreground masks if the input data is of RGBA format. However, it will prioritize `--masks` over
+the alpha channel if they both co-exist.
+- `--mask_gt`: even with `--masks` or the alpha channel from input images, training would still perform with unmasked RGB
+as GT. To mask them out and fit Gaussians to the foreground object only, add this option. This is especially useful for
+reconstructing objects from scenes with overwhelming background.
+- `--metallic`: when specified, the optimization process will use the full metallic shading model, default to `False`.
+
+</details>
+
+### Mesh extraction
+```
+python render.py -m /path/to/model/directory --extract_mesh --skip_test
+```
+
+The `.ply` file of the extracted triangle mesh should be found under:
+```
+/path/to/model/directory/train/ours_30000/meshs/tsdf_post.ply
+```
+
+<details>
+<summary><span style="font-weight: bold;">Important parameters for render.py</span></summary>
+
+- `--max_depth`: the maximum distance beyond which points will be discared during depth fusion. This can be estimated
+from the scene's half extent value reported during training/rendering.
+- `--voxel_size`: how dense the sampling grid should be for TSDF fusion.
+- `--sdf_trunc`: smaller values yield sharper surfaces but increase sensitivity to depth noise, while larger values
+improve robustness to noise but blur fine details.
+- `--num_clusters`: how many clusters to keep for mesh post-processing, default to 1 (extract a single object).
+
+</details>
+
+## Evaluation
 
 ## Acknowledgements
 This repository and the entire project are based on previous Gaussian splatting works. We acknowledge and appreciate
