@@ -102,10 +102,8 @@ class OptimizationParams(ParamGroup):
         self.prune_init_points = True
         self.radii2D_threshold = 20
         # GaussianShader
-        self.delta_norm_lr = 0.002
         self.lambda_sparse = 0.001
         self.use_sparse_loss = True
-        self.lambda_delta_normal = 0.001
         # PGSR
         self.lambda_planar = 100.0
         self.lambda_depth_normal = 0.015
