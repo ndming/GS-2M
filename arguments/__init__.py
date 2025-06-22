@@ -99,12 +99,12 @@ class OptimizationParams(ParamGroup):
         self.densify_grad_abs_threshold = 0.0008
         self.use_opacity_reduce = False
         self.opacity_reduce_interval = 500
-        self.prune_init_points = False
+        self.prune_init_points = True
         self.radii2D_threshold = 20
         # GaussianShader
         self.delta_norm_lr = 0.002
         self.lambda_sparse = 0.001
-        self.use_sparse_loss = False
+        self.use_sparse_loss = True
         self.lambda_delta_normal = 0.001
         # PGSR
         self.lambda_planar = 100.0
