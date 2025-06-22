@@ -13,7 +13,8 @@
 #define CUDA_RASTERIZER_CONFIG_H_INCLUDED
 
 #define NUM_CHANNELS 3
-#define NUM_FEATURES 11 // alpha (1), distance (1), normal (3), albedo (3), roughness (1), metallic (1), delta_norm (1)
+#define NUM_FEATURES 10 // alpha (1), distance (1), normal (3), albedo (3), roughness (1), metallic (1)
+#define BOOTSTRAP_FEATURE_END 1
 #define BLOCK_X 16
 #define BLOCK_Y 16
 

@@ -26,6 +26,7 @@ namespace BACKWARD
         int W, int H,
         float fx, float fy,
         const float* bg_color,
+        int featureCount,
         const float2* means2D,
         const float4* conic_opacities,
         const float* colors,

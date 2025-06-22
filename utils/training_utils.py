@@ -72,7 +72,7 @@ def report_training(
                 psnr_test_pbr = 0.0
 
                 for idx, viewpoint in enumerate(config['cameras']):
-                    render_pkg = render_func(viewpoint, scene.gaussians, *render_args)
+                    render_pkg = render_func(viewpoint, scene.gaussians, *render_args, True, True, True)
                     image = torch.clamp(render_pkg["render"], 0.0, 1.0)
                     gt_image = torch.clamp(viewpoint.gt_image.to("cuda"), 0.0, 1.0)
                     stem = viewpoint.image_name.rsplit('.', 1)[0]

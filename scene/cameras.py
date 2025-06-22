@@ -56,15 +56,6 @@ class Camera(torch.nn.Module):
         self.alpha_mask = self.alpha_mask.to(self.data_device)
         self.gray_image = None # only create during training
 
-        # If mask is provided, process it for mesh TSDF fusion
-        if pil_mask is not None:
-            self.clear_mask = torch.tensor(np.array(pil_mask), dtype=torch.float32, device=self.data_device) / 255.0
-            self.clear_mask = erode(self.clear_mask[None, None], ksize=12)
-            self.clear_mask = F.interpolate(
-                self.clear_mask, size=(self.image_height, self.image_width),
-                mode='bilinear', align_corners=False).squeeze() # (H, W)
-            self.clear_mask = (self.clear_mask < 0.5).to(self.data_device)
-
         self.zfar = 100.0
         self.znear = 0.01
 

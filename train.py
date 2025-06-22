@@ -80,7 +80,11 @@ def train(model, opt, pipe, test_iterations, save_iterations, checkpoint_iterati
         viewpoint_cam = viewpoint_stack.pop(randint(0, len(viewpoint_stack) - 1))
 
         # Render
-        render_pkg = render(viewpoint_cam, gaussians, pipe, background, sobel_normal=iteration > opt.geometry_from_iter)
+        geometry_stage = iteration > opt.geometry_from_iter
+        material_stage = iteration > opt.material_from_iter
+        render_pkg = render(
+            viewpoint_cam, gaussians, pipe, background, geometry_stage, material_stage,
+            sobel_normal=geometry_stage, inference=False, pad_normal=False)
         image, visibility_filter, radii = render_pkg["render"], render_pkg["visibility_filter"], render_pkg["radii"]
         gt_image = viewpoint_cam.gt_image.cuda()
 
@@ -100,7 +104,7 @@ def train(model, opt, pipe, test_iterations, save_iterations, checkpoint_iterati
 
         # Geometry losses
         Lgeo = torch.tensor([0.0])
-        if iteration > opt.geometry_from_iter:
+        if geometry_stage:
             lambda_dn = opt.lambda_depth_normal
             Ldn = depth_normal_loss(render_pkg["normal_map"], render_pkg["sobel_normal_map"], gt_image)
 
@@ -117,7 +121,7 @@ def train(model, opt, pipe, test_iterations, save_iterations, checkpoint_iterati
 
         # Material losses
         Lmat = torch.tensor([0.0])
-        if iteration > opt.material_from_iter:
+        if material_stage:
             # Formulate roughness
             roughness_map = render_pkg["roughness_map"]
             rmax, rmin = 1.0, 0.04

@@ -24,8 +24,9 @@ def render(
         pc: GaussianModel,
         pipe,
         bg_color: torch.Tensor,
-        scaling_modifier=1.0,
-        sobel_normal=True,
+        geometry_stage=False,
+        material_stage=False,
+        sobel_normal=False,
         inference=False,
         pad_normal=False):
     """
@@ -62,7 +63,7 @@ def render(
     cov3D_precomp = None
 
     if pipe.compute_cov3D_python:
-        cov3D_precomp = pc.get_covariance(scaling_modifier)
+        cov3D_precomp = pc.get_covariance()
     else:
         scales = pc.get_scaling
         rotations = pc.get_rotation
@@ -81,19 +82,19 @@ def render(
         shs = pc.get_features
 
      # Blend normals in camera space
-    normals, normal_deltas = pc.get_normals(viewpoint_camera.camera_center, return_deltas=True) # normals in world space
+    normals = pc.get_normals(viewpoint_camera.camera_center) # normals in world space
     cam_normals = normals @ viewpoint_camera.world_view_transform[:3, :3]
     # Remember that view matrix is stored transposed
     cam_points = means3D @ viewpoint_camera.world_view_transform[:3, :3] + viewpoint_camera.world_view_transform[3, :3]
 
-    features = torch.zeros((means3D.shape[0], 11), dtype=torch.float32, device="cuda")
+    feature_count = 10 if material_stage else 5 if geometry_stage else 1
+    features = torch.zeros((means3D.shape[0], 10), dtype=torch.float32, device="cuda")
     features[:, 0] = 1.0 # alpha
     features[:, 1] = cam_points[:, 2] if pipe.z_depth else (cam_normals * cam_points).sum(dim=-1).abs() # distance
     features[:, 2:5] = cam_normals
     features[:, 5:8] = albedo
     features[:, 8:9] = roughness
     features[:, 9:10] = metallic
-    # features[:, 10] = normal_deltas.norm(dim=1)
 
     raster_settings = GaussianRasterizationSettings(
         image_height=int(viewpoint_camera.image_height),
@@ -101,12 +102,13 @@ def render(
         tanfovx=tanfovx,
         tanfovy=tanfovy,
         bg=bg_color,
-        scale_modifier=scaling_modifier,
+        scale_modifier=1.0,
         viewmatrix=viewpoint_camera.world_view_transform,
         projmatrix=viewpoint_camera.full_proj_transform,
         sh_degree=pc.active_sh_degree,
         campos=viewpoint_camera.camera_center,
-        prefiltered=False)
+        prefiltered=False,
+        feature_count=feature_count)
     rasterizer = GaussianRasterizer(raster_settings=raster_settings)
 
     # Rasterize visible Gaussians to image, obtain their radii (on screen). 
@@ -144,7 +146,6 @@ def render(
         "albedo_map": buffer[5:8, ...], # (3, H, W)
         "roughness_map": buffer[8:9, ...], # (1, H, W)
         "metallic_map": buffer[9:10, ...], # (1, H, W)
-        "dn_norm_map": buffer[10:11, ...], # (1, H, W)
         "normal_mask": normal_mask, # (1, H, W)
     }
 

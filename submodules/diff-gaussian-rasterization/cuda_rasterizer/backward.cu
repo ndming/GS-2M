@@ -418,6 +418,7 @@ renderCUDA(
         const int W, const int H,
         const float fx, const float fy,
         const float* __restrict__ bg_color,
+        const int featureCount,
         const float2* __restrict__ points_xy_image,
         const float4* __restrict__ conic_opacity,
         const float* __restrict__ colors,
@@ -472,22 +473,25 @@ renderCUDA(
     float accum_buf[F] = { 0 };
     float dL_dpixel[C];
     float dL_dbuffer[F];
+
     if (inside) {
         for (int i = 0; i < C; i++)
             dL_dpixel[i] = grad_colors[i * H * W + pix_id];
 
-        for (int i = 0; i < F; i++)
+        for (int i = 0; i < featureCount; i++)
             dL_dbuffer[i] = grad_buffer[i * H * W + pix_id];
 
-        // Compute gradients of depth w.r.t. distance and normal
-        // Channel 1: distance, channel 2-5: normals
-        const float3 normal = { buffer[2 * H * W + pix_id], buffer[3 * H * W + pix_id], buffer[4 * H * W + pix_id]};
-        const float distance = buffer[1 * H * W + pix_id];
-        const float tmp = (normal.x * ray.x + normal.y * ray.y + normal.z + 1.0e-8);
-        dL_dbuffer[1] += (-grad_depth[pix_id] / tmp);
-        dL_dbuffer[2] += grad_depth[pix_id] * (distance / (tmp * tmp) * ray.x);
-        dL_dbuffer[3] += grad_depth[pix_id] * (distance / (tmp * tmp) * ray.y);
-        dL_dbuffer[4] += grad_depth[pix_id] * (distance / (tmp * tmp));
+        if (featureCount > BOOTSTRAP_FEATURE_END) {
+            // Compute gradients of depth w.r.t. distance and normal
+            // Channel 1: distance, channel 2-5: normals
+            const float3 normal = { buffer[2 * H * W + pix_id], buffer[3 * H * W + pix_id], buffer[4 * H * W + pix_id]};
+            const float distance = buffer[1 * H * W + pix_id];
+            const float tmp = (normal.x * ray.x + normal.y * ray.y + normal.z + 1.0e-8);
+            dL_dbuffer[1] += (-grad_depth[pix_id] / tmp);
+            dL_dbuffer[2] += grad_depth[pix_id] * (distance / (tmp * tmp) * ray.x);
+            dL_dbuffer[3] += grad_depth[pix_id] * (distance / (tmp * tmp) * ray.y);
+            dL_dbuffer[4] += grad_depth[pix_id] * (distance / (tmp * tmp));
+        }
     }
 
     float last_alpha = 0;
@@ -512,7 +516,7 @@ renderCUDA(
             collected_conic_opacity[block.thread_rank()] = conic_opacity[coll_id];
             for (int i = 0; i < C; i++)
                 collected_colors[i * BLOCK_SIZE + block.thread_rank()] = colors[coll_id * C + i];
-            for (int i = 0; i < F; i ++)
+            for (int i = 0; i < featureCount; i ++)
                 collected_features[i * BLOCK_SIZE + block.thread_rank()] = features[coll_id * F + i];
         }
         block.sync();
@@ -559,7 +563,7 @@ renderCUDA(
                 // many that were affected by this Gaussian.
                 atomicAdd(&(dL_dcolors[global_id * C + ch]), dchannel_dcolor * dL_dchannel);
             }
-            for (int ch = 0; ch < F; ch++) {
+            for (int ch = 0; ch < featureCount; ch++) {
                 const float c = collected_features[ch * BLOCK_SIZE + j];
                 accum_buf[ch] = last_alpha * last_features[ch] + (1.f - last_alpha) * accum_buf[ch];
                 last_features[ch] = c;
@@ -679,6 +683,7 @@ void BACKWARD::render(
     const int W, const int H,
     const float fx, const float fy,
     const float* bg_color,
+    const int featureCount,
     const float2* means2D,
     const float4* conic_opacity,
     const float* colors,
@@ -701,6 +706,7 @@ void BACKWARD::render(
         W, H,
         fx, fy,
         bg_color,
+        featureCount,
         means2D,
         conic_opacity,
         colors,

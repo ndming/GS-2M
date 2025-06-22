@@ -33,7 +33,8 @@ RasterizeGaussiansCUDA(
     const torch::Tensor& sh,
     int degree,
     const torch::Tensor& campos,
-    bool prefiltered);
+    bool prefiltered,
+    int featureCount);
 
 std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
 RasterizeGaussiansBackwardCUDA(
@@ -44,23 +45,24 @@ RasterizeGaussiansBackwardCUDA(
     const torch::Tensor& colors,
     const torch::Tensor& scales,
     const torch::Tensor& rotations,
-    const float scale_modifier,
+    float scale_modifier,
     const torch::Tensor& cov3D_precomp,
     const torch::Tensor& features,
     const torch::Tensor& viewmatrix,
     const torch::Tensor& projmatrix,
-    const float tan_fovx,
-    const float tan_fovy,
+    float tan_fovx,
+    float tan_fovy,
     const torch::Tensor& grad_colors,
     const torch::Tensor& grad_buffer,
     const torch::Tensor& grad_depth,
     const torch::Tensor& sh,
-    const int degree,
+    int degree,
     const torch::Tensor& campos,
     const torch::Tensor& geomBuffer,
-    const int R, // total tiles touched
+    int R, // total tiles touched
     const torch::Tensor& binningBuffer,
-    const torch::Tensor& imageBuffer);
+    const torch::Tensor& imageBuffer,
+    int featureCount);
 
 torch::Tensor markVisible(
     const torch::Tensor& means3D,

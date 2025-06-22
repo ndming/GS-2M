@@ -142,7 +142,9 @@ def multi_view_loss(scene, viewpoint_cam, opt, render_pkg, pipe, bg_color):
     pixels = torch.stack([ix, iy], dim=-1).float().to(render_pkg['depth_map'].device) # (H, W, 2)
 
     # Render the depth map and normal map from the nearest camera
-    nearest_render_pkg = render(nearest_cam, scene.gaussians, pipe, bg_color, sobel_normal=False)
+    nearest_render_pkg = render(
+        nearest_cam, scene.gaussians, pipe, bg_color, geometry_stage=True, material_stage=False,
+        sobel_normal=False, inference=False, pad_normal=False)
     # Use depth map to back-project pixel points in reference view to 3D world points
     pts = _get_points_from_depth(viewpoint_cam, render_pkg['depth_map']) # (N, 3)
     # Find the coordinates of those points in neighbor camera's view

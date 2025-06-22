@@ -47,7 +47,8 @@ RasterizeGaussiansCUDA(
         const torch::Tensor& shs,
         const int degree,
         const torch::Tensor& campos,
-        const bool prefiltered) {
+        const bool prefiltered,
+        const int featureCount) {
     if (means3D.ndimension() != 2 || means3D.size(1) != 3) {
         AT_ERROR("means3D must have dimensions (num_points, 3)");
     }
@@ -103,6 +104,7 @@ RasterizeGaussiansCUDA(
             tan_fovx,
             tan_fovy,
             prefiltered,
+            featureCount,
             out_colors.contiguous().data_ptr<float>(),
             radii.contiguous().data_ptr<int>(),
             out_observe.contiguous().data_ptr<int>(),
@@ -137,7 +139,8 @@ RasterizeGaussiansBackwardCUDA(
         const torch::Tensor& geomBuffer,
         const int R,
         const torch::Tensor& binningBuffer,
-        const torch::Tensor& imageBuffer) {
+        const torch::Tensor& imageBuffer,
+        const int featureCount) {
     const int P = means3D.size(0);
     const int H = grad_colors.size(1);
     const int W = grad_colors.size(2);
@@ -181,6 +184,7 @@ RasterizeGaussiansBackwardCUDA(
             reinterpret_cast<char*>(geomBuffer.contiguous().data_ptr()),
             reinterpret_cast<char*>(binningBuffer.contiguous().data_ptr()),
             reinterpret_cast<char*>(imageBuffer.contiguous().data_ptr()),
+            featureCount,
             grad_colors.contiguous().data_ptr<float>(),
             grad_buffer.contiguous().data_ptr<float>(),
             grad_depth.contiguous().data_ptr<float>(),

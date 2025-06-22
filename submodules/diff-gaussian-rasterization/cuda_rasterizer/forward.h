@@ -63,6 +63,7 @@ namespace FORWARD {
         float* out_final_Ts,
         uint32_t* n_contrib,
         const float* bg_colors,
+        int featureCount,
         float* out_colors,
         int* out_observe,
         float* out_buffer,

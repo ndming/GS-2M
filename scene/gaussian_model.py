@@ -54,7 +54,6 @@ class GaussianModel:
         self._rotation = torch.empty(0)
         self._opacity = torch.empty(0)
 
-        self._delta_normal = torch.empty(0)
         self._albedo = torch.empty(0)
         self._roughness = torch.empty(0)
         self._metallic = torch.empty(0)
@@ -77,7 +76,6 @@ class GaussianModel:
             self._scaling,
             self._rotation,
             self._opacity,
-            self._delta_normal,
             self._albedo,
             self._roughness,
             self._metallic,
@@ -97,7 +95,6 @@ class GaussianModel:
         self._scaling,
         self._rotation,
         self._opacity,
-        self._delta_normal,
         self._albedo,
         self._roughness,
         self._metallic,
@@ -146,7 +143,7 @@ class GaussianModel:
     def get_covariance(self, scaling_modifier = 1):
         return self.covariance_activation(self.get_scaling, scaling_modifier, self._rotation)
     
-    def get_normals(self, camera_center, return_deltas=False):
+    def get_normals(self, camera_center):
         # One-hot encode minimum axes from scaling factors
         scales = self.get_scaling
         min_axix_idx = torch.argmin(scales, dim=-1, keepdim=True)
@@ -158,16 +155,8 @@ class GaussianModel:
         view_dirs = camera_center[None] - self.get_xyz
         flip_mask = torch.sum(normals * view_dirs, dim=-1) < 0.0
         normals[flip_mask] *= -1.0
-
-        # If normal wasn't flipped, use the first delta, otherwise use the second
-        idx = torch.where(~flip_mask, 0, 1).long()[:, None, None].repeat(1, 3, 1)
-        deltas = torch.gather(self._delta_normal, index=idx, dim=-1).squeeze(-1) # (N, 3)
-
-        # normals += deltas
+        # Normalization
         normals = normals / normals.norm(dim=1, keepdim=True)
-
-        if return_deltas:
-            return normals, deltas
         return normals
 
     @property
@@ -204,7 +193,6 @@ class GaussianModel:
         rots[:, 0] = 1
         opacities = inverse_sigmoid(0.1 * torch.ones((n_points, 1), dtype=torch.float, device="cuda"))
 
-        normal_deltas = torch.zeros((n_points, 3, 2), dtype=torch.float32, device="cuda")
         albedo = torch.ones((n_points, 3), dtype=torch.float, device="cuda")
         roughness = torch.ones((n_points, 1), dtype=torch.float, device="cuda")
         metallic = torch.ones((n_points, 1), dtype=torch.float, device="cuda")
@@ -213,14 +201,14 @@ class GaussianModel:
             fused_point_cloud,
             features[:, :, :1].transpose(1, 2).contiguous(),
             features[:, :, 1:].transpose(1, 2).contiguous(),
-            scales, rots, opacities, normal_deltas,
+            scales, rots, opacities,
             albedo, roughness, metallic)
         self.parameterize(params)
 
         self.max_radii2D = torch.zeros((self.get_xyz.shape[0]), device="cuda")
 
     def parameterize(self, params):
-        xyz, features_dc, features_rest, scaling, rotation, opacity, delta_norm, albedo, roughness, metallic = params
+        xyz, features_dc, features_rest, scaling, rotation, opacity, albedo, roughness, metallic = params
 
         self._xyz = nn.Parameter(xyz.requires_grad_(True))
         self._features_dc = nn.Parameter(features_dc.requires_grad_(True))
@@ -229,7 +217,6 @@ class GaussianModel:
         self._rotation = nn.Parameter(rotation.requires_grad_(True))
         self._opacity = nn.Parameter(opacity.requires_grad_(True))
 
-        self._delta_normal = nn.Parameter(delta_norm.requires_grad_(True))
         self._albedo = nn.Parameter(albedo.requires_grad_(True))
         self._roughness = nn.Parameter(roughness.requires_grad_(True))
         self._metallic = nn.Parameter(metallic.requires_grad_(True))
@@ -247,7 +234,6 @@ class GaussianModel:
             {'params': [self._opacity], 'lr': training_args.opacity_lr, "name": "opacity"},
             {'params': [self._scaling], 'lr': training_args.scaling_lr, "name": "scaling"},
             {'params': [self._rotation], 'lr': training_args.rotation_lr, "name": "rotation"},
-            {'params': [self._delta_normal], 'lr': training_args.delta_norm_lr, "name": "delta_normal"},
             {"params": [self._albedo], "lr": training_args.opacity_lr, "name": "albedo"},
             {"params": [self._roughness], "lr": training_args.opacity_lr, "name": "roughness"},
             {"params": [self._metallic], "lr": training_args.opacity_lr, "name": "metallic"},
@@ -275,7 +261,7 @@ class GaussianModel:
                 return lr
 
     def construct_list_of_attributes(self):
-        l = ['x', 'y', 'z', 'dnx1', 'dny1', 'dnz1', 'dnx2', 'dny2', 'dnz2']
+        l = ['x', 'y', 'z', 'nx', 'ny', 'nz']
         # All channels except the 3 DC, features are (N, C, 3)
         for i in range(self._features_dc.shape[1] * self._features_dc.shape[2]):
             l.append('f_dc_{}'.format(i))
@@ -296,7 +282,7 @@ class GaussianModel:
         mkdir_p(os.path.dirname(path))
 
         xyz = self._xyz.detach().cpu().numpy()
-        delta_norm = self._delta_normal.detach().transpose(1, 2).flatten(start_dim=1).contiguous().cpu().numpy()
+        normals = np.zeros_like(xyz)
         f_dc = self._features_dc.detach().transpose(1, 2).flatten(start_dim=1).contiguous().cpu().numpy()
         f_rest = self._features_rest.detach().transpose(1, 2).flatten(start_dim=1).contiguous().cpu().numpy()
         opacity = self._opacity.detach().cpu().numpy()
@@ -309,7 +295,7 @@ class GaussianModel:
         dtype_full = [(attribute, 'f4') for attribute in self.construct_list_of_attributes()]
 
         elements = np.empty(xyz.shape[0], dtype=dtype_full)
-        attrs = (xyz, delta_norm, f_dc, f_rest, opacity, scale, rotation, albedo, roughness, metallic)
+        attrs = (xyz, normals, f_dc, f_rest, opacity, scale, rotation, albedo, roughness, metallic)
         attributes = np.concatenate(attrs, axis=1)
         elements[:] = list(map(tuple, attributes))
         el = PlyElement.describe(elements, 'vertex')
@@ -323,15 +309,6 @@ class GaussianModel:
             np.asarray(plydata.elements[0]["y"]),
             np.asarray(plydata.elements[0]["z"])), axis=1)
         n_points = xyz.shape[0]
-        
-        normal_deltas = np.stack((
-            np.asarray(plydata.elements[0]["dnx1"]),
-            np.asarray(plydata.elements[0]["dny1"]),
-            np.asarray(plydata.elements[0]["dnz1"]),
-            np.asarray(plydata.elements[0]["dnx2"]),
-            np.asarray(plydata.elements[0]["dny2"]),
-            np.asarray(plydata.elements[0]["dnz2"])), axis=1)
-        normal_deltas = normal_deltas.reshape((n_points, 2, 3))
 
         opacities = np.asarray(plydata.elements[0]["opacity"])[..., np.newaxis]
 
@@ -375,7 +352,6 @@ class GaussianModel:
             torch.tensor(scales, dtype=torch.float, device="cuda"),
             torch.tensor(rots, dtype=torch.float, device="cuda"),
             torch.tensor(opacities, dtype=torch.float, device="cuda"),
-            torch.tensor(normal_deltas, dtype=torch.float, device="cuda").transpose(1, 2).contiguous(),
             torch.tensor(albedo, dtype=torch.float, device="cuda"),
             torch.tensor(roughness, dtype=torch.float, device="cuda"),
             torch.tensor(metallic, dtype=torch.float, device="cuda"))
@@ -437,7 +413,6 @@ class GaussianModel:
         self._scaling = optimizable_tensors["scaling"]
         self._rotation = optimizable_tensors["rotation"]
 
-        self._delta_normal = optimizable_tensors["delta_normal"]
         self._albedo = optimizable_tensors["albedo"]
         self._roughness = optimizable_tensors["roughness"]
         self._metallic = optimizable_tensors["metallic"]
@@ -483,7 +458,7 @@ class GaussianModel:
 
     def densification_postfix(
             self, new_xyz, new_features_dc, new_features_rest, new_opacities, new_scaling, new_rotation,
-            new_delta_normal, new_albedo, new_roughness, new_metallic):
+            new_albedo, new_roughness, new_metallic):
         d = {
             "xyz": new_xyz,
             "f_dc": new_features_dc,
@@ -491,7 +466,6 @@ class GaussianModel:
             "opacity": new_opacities,
             "scaling": new_scaling,
             "rotation": new_rotation,
-            "delta_normal": new_delta_normal,
             "albedo": new_albedo,
             "roughness": new_roughness,
             "metallic": new_metallic,
@@ -505,7 +479,6 @@ class GaussianModel:
         self._scaling = optimizable_tensors["scaling"]
         self._rotation = optimizable_tensors["rotation"]
 
-        self._delta_normal = optimizable_tensors["delta_normal"]
         self._albedo = optimizable_tensors["albedo"]
         self._roughness = optimizable_tensors["roughness"]
         self._metallic = optimizable_tensors["metallic"]
@@ -538,14 +511,13 @@ class GaussianModel:
         new_features_rest = self._features_rest[selected_pts_mask].repeat(N, 1, 1)
         new_opacity = self._opacity[selected_pts_mask].repeat(N, 1)
 
-        new_delta_normal = self._delta_normal[selected_pts_mask].repeat(N, 1, 1)
         new_albedo = self._albedo[selected_pts_mask].repeat(N, 1)
         new_roughness = self._roughness[selected_pts_mask].repeat(N, 1)
         new_metallic = self._metallic[selected_pts_mask].repeat(N, 1)
 
         self.densification_postfix(
             new_xyz, new_features_dc, new_features_rest, new_opacity, new_scaling, new_rotation,
-            new_delta_normal, new_albedo, new_roughness, new_metallic)
+            new_albedo, new_roughness, new_metallic)
 
         prune_filter = torch.cat((selected_pts_mask, torch.zeros(N * selected_pts_mask.sum(), device="cuda", dtype=bool)))
         self.prune_points(prune_filter)
@@ -564,14 +536,13 @@ class GaussianModel:
         new_scaling = self._scaling[selected_pts_mask]
         new_rotation = self._rotation[selected_pts_mask]
 
-        new_delta_normal = self._delta_normal[selected_pts_mask]
         new_albedo = self._albedo[selected_pts_mask]
         new_roughness = self._roughness[selected_pts_mask]
         new_metallic = self._metallic[selected_pts_mask]
 
         self.densification_postfix(
             new_xyz, new_features_dc, new_features_rest, new_opacities, new_scaling, new_rotation,
-            new_delta_normal, new_albedo, new_roughness, new_metallic)
+            new_albedo, new_roughness, new_metallic)
 
     def densify_and_prune(self, max_grad, max_grad_abs, min_opacity, extent, max_screen_size=None):
         grads = self.xyz_gradient_accum / self.denom

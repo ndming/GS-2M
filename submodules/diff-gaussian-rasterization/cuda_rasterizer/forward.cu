@@ -259,6 +259,7 @@ __global__ void __launch_bounds__(BLOCK_X * BLOCK_Y) renderCUDA(
         float* __restrict__ out_final_Ts,
         uint32_t* __restrict__ n_contrib,
         const float* __restrict__ bg_colors,
+        const int featureCount,
         float* __restrict__ out_colors,
         int* __restrict__ out_observe,
         float* __restrict__ out_buffer,
@@ -344,7 +345,7 @@ __global__ void __launch_bounds__(BLOCK_X * BLOCK_Y) renderCUDA(
             for (int ch = 0; ch < CHANNELS; ch++)
                 C[ch] += precomputed_colors[collected_id[j] * CHANNELS + ch] * alpha * T;
 
-            for (int ch = 0; ch < FEATURES; ch++)
+            for (int ch = 0; ch < featureCount; ch++)
                 F[ch] += features[collected_id[j] * FEATURES + ch] * alpha * T;
 
             if (T > 0.5) {
@@ -368,12 +369,14 @@ __global__ void __launch_bounds__(BLOCK_X * BLOCK_Y) renderCUDA(
         for (int ch = 0; ch < CHANNELS; ch++)
             out_colors[ch * H * W + pix_id] = C[ch] + T * bg_colors[ch];
 
-        for (int ch = 0; ch < FEATURES; ch++)
+        for (int ch = 0; ch < featureCount; ch++)
             out_buffer[ch * H * W + pix_id] = F[ch];
 
-        // Channel 1: distance, channel 2-5: normals
-        const float2 ray = { (pixf.x - cx) / focal_x, (pixf.y - cy) / focal_y };
-        out_depth[pix_id] = F[1] / -(F[2] * ray.x + F[3] * ray.y + F[4] + 1.0e-8);
+        if (featureCount > BOOTSTRAP_FEATURE_END) {
+            // Channel 1: distance, channel 2-5: normals
+            const float2 ray = { (pixf.x - cx) / focal_x, (pixf.y - cy) / focal_y };
+            out_depth[pix_id] = F[1] / -(F[2] * ray.x + F[3] * ray.y + F[4] + 1.0e-8);
+        }
     }
 }
 
@@ -393,6 +396,7 @@ void FORWARD::render(
     float* out_final_Ts,
     uint32_t* n_contrib,
     const float* bg_colors,
+    const int featureCount,
     float* out_colors,
     int* out_observe,
     float* out_buffer,
@@ -413,6 +417,7 @@ void FORWARD::render(
         out_final_Ts,
         n_contrib,
         bg_colors,
+        featureCount,
         out_colors,
         out_observe,
         out_buffer,

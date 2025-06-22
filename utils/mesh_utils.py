@@ -43,12 +43,8 @@ def fuse_depths(tsdf_depths, views, render_dir, max_depth, voxel_size, sdf_trunc
     # tsdf_depths is a (N, H, W) tensor
     for idx, view in enumerate(tqdm(views, desc="[>] TSDF Fusion", ncols=80)):
         ref_depth = tsdf_depths[idx].cuda() # (H, W)
-
-        if view.clear_mask is not None:
-            ref_depth[view.clear_mask] = 0
-        else:
-            ref_depth[view.alpha_mask.squeeze() < 0.5] = 0
-            ref_depth[ref_depth > max_depth] = 0
+        ref_depth[view.alpha_mask.squeeze() < 0.5] = 0
+        ref_depth[ref_depth > max_depth] = 0
 
         ref_depth = ref_depth.cpu().numpy()
 
