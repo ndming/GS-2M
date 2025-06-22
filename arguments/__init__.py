@@ -120,11 +120,11 @@ class OptimizationParams(ParamGroup):
         self.multi_view_patch_size = 3
         # GS-IR/GS-ROR
         self.lambda_tv_normal = 0.1
-        self.lambda_tv_smooth = 0.01
+        self.lambda_tv_smooth = 0.05
         self.lambda_tv_envmap = 0.01
         # Ours
         self.geometry_from_iter = 5000
-        self.material_from_iter = 30_000
+        self.material_from_iter = 15_000
         self.mv_angle_threshold = 30
         self.mv_angle_factor = 1.0
         self.mv_occlusion_threshold = 5e-4
