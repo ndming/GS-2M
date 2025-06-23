@@ -178,6 +178,7 @@ if __name__ == "__main__":
     parser.add_argument("--res_factor", "-r", default=1, type=int)
     parser.add_argument("--iteration", default=-1, type=int)
     parser.add_argument("--label", default="ours", type=str)
+    parser.add_argument("--label_mesh", default="post", type=str)
     parser.add_argument("--skip_rendering", action='store_true')
     parser.add_argument("--render_view_idx", default=-1, type=int)
     parser.add_argument("--skip_animating", action='store_true')
@@ -188,7 +189,7 @@ if __name__ == "__main__":
 
     model_dir = Path(args.model).resolve()
     loaded_iter = search_for_max_iter(str(model_dir / "point_cloud")) if args.iteration == -1 else args.iteration
-    ply_file = model_dir / "train" / f"{args.label}_{loaded_iter}" / "meshes" / "tsdf_post.ply"
+    ply_file = model_dir / "train" / f"{args.label}_{loaded_iter}" / "meshes" / f"tsdf_{args.label_mesh}.ply"
 
     out_dir = model_dir / "train" / f"{args.label}_{loaded_iter}" / "visuals"
     os.makedirs(out_dir, exist_ok=True)
@@ -251,4 +252,7 @@ if __name__ == "__main__":
         bsdf.inputs['Base Color'].default_value = (0.7, 0.7, 0.7, 1)
         light.energy = 25.0
         render_images(scene, camera, out_dir, views, args.res_factor, args.render_view_idx)
-        print(f"Rendered {len(views)} stills to: {out_dir}")
+        if args.render_view_idx >= 0:
+            print(f"Rendered view {args.render_view_idx} to: {out_dir}")
+        else:
+            print(f"Rendered {len(views)} stills to: {out_dir}")
