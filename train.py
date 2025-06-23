@@ -158,9 +158,9 @@ def train(model, opt, pipe, test_iterations, save_iterations, checkpoint_iterati
                 brdf_lut=scene.brdf_lut,
                 gamma=model.gamma)
 
-            render_rgb = pbr_pkg["render_rgb"].permute(2, 0, 1) # (3, H, W)
-            render_rgb = torch.where(normal_mask, render_rgb, background[:, None, None])
-            Lpbr = l1_loss(render_rgb, gt_image)
+            render_pbr = pbr_pkg["render_rgb"].permute(2, 0, 1) # (3, H, W)
+            render_pbr = torch.where(normal_mask, render_pbr, background[:, None, None])
+            Lpbr = l1_loss(render_pbr, gt_image)
 
             # Smoothness loss
             arm = torch.cat([albedo_map, roughness_map, metallic_map], dim=0) # (5, H, W)
