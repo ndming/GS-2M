@@ -8,18 +8,21 @@ import open3d as o3d
 from tqdm import tqdm
 from collections import deque
 
+from .loss_utils import _get_points_from_depth
+
 def post_process_mesh(mesh, cluster_to_keep=1):
     """
     Post-process a mesh to filter out floaters and disconnected parts
     """
     print(f"[>] Post processing mesh to keep {cluster_to_keep} clusters")
     post = copy.deepcopy(mesh)
-    with o3d.utility.VerbosityContextManager(o3d.utility.VerbosityLevel.Debug) as cm:
-            triangle_clusters, cluster_n_triangles, cluster_area = (post.cluster_connected_triangles())
+    with o3d.utility.VerbosityContextManager(o3d.utility.VerbosityLevel.Error) as cm:
+        triangle_clusters, cluster_n_triangles, _ = post.cluster_connected_triangles()
 
+    print(f"[>] Found {len(cluster_n_triangles)} clusters")
     triangle_clusters = np.asarray(triangle_clusters)
     cluster_n_triangles = np.asarray(cluster_n_triangles)
-    cluster_area = np.asarray(cluster_area)
+
     n_cluster = np.sort(cluster_n_triangles.copy())[-cluster_to_keep]
     n_cluster = max(n_cluster, 50) # filter meshes smaller than 50
     triangles_to_remove = cluster_n_triangles[triangle_clusters] < n_cluster
@@ -31,7 +34,7 @@ def post_process_mesh(mesh, cluster_to_keep=1):
 def write_mesh(file, mesh):
     o3d.io.write_triangle_mesh(file, mesh, write_triangle_uvs=True, write_vertex_colors=True, write_vertex_normals=True)
 
-def fuse_depths(tsdf_depths, views, render_dir, max_depth, voxel_size, sdf_trunc=-1):
+def fuse_depths(tsdf_depths, views, render_dir, max_depth, voxel_size, sdf_trunc=-1, bounds=None):
     if sdf_trunc < 0:
         sdf_trunc = 4.0 * voxel_size
 
@@ -43,8 +46,17 @@ def fuse_depths(tsdf_depths, views, render_dir, max_depth, voxel_size, sdf_trunc
     # tsdf_depths is a (N, H, W) tensor
     for idx, view in enumerate(tqdm(views, desc="[>] TSDF Fusion", ncols=80)):
         ref_depth = tsdf_depths[idx].cuda() # (H, W)
-        ref_depth[view.alpha_mask.squeeze() < 0.5] = 0
-        ref_depth[ref_depth > max_depth] = 0
+        h, w = ref_depth.shape
+
+        if bounds is not None:
+            pts = _get_points_from_depth(view, ref_depth[None])
+            mask =  (pts[..., 0] < bounds[0, 0]) | (pts[..., 0] > bounds[0, 1]) |\
+                    (pts[..., 1] < bounds[1, 0]) | (pts[..., 1] > bounds[1, 1]) |\
+                    (pts[..., 2] < bounds[2, 0]) | (pts[..., 2] > bounds[2, 1])
+            mask = mask.reshape(h, w)
+            ref_depth[mask] = 0
+        else:
+            ref_depth[view.alpha_mask.squeeze() < 0.5] = 0
 
         ref_depth = ref_depth.cpu().numpy()
 
@@ -59,7 +71,6 @@ def fuse_depths(tsdf_depths, views, render_dir, max_depth, voxel_size, sdf_trunc
         rgbd = o3d.geometry.RGBDImage.create_from_color_and_depth(
             color, depth, depth_scale=1000., depth_trunc=max_depth, convert_rgb_to_intensity=False)
 
-        h, w = ref_depth.shape
         intrinsic = o3d.camera.PinholeCameraIntrinsic(w, h, view.Fx, view.Fy, view.Cx, view.Cy)
         volume.integrate(rgbd, intrinsic, pose)
 
