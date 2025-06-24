@@ -34,10 +34,7 @@ def post_process_mesh(mesh, cluster_to_keep=1):
 def write_mesh(file, mesh):
     o3d.io.write_triangle_mesh(file, mesh, write_triangle_uvs=True, write_vertex_colors=True, write_vertex_normals=True)
 
-def fuse_depths(tsdf_depths, views, render_dir, max_depth, voxel_size, sdf_trunc=-1, bounds=None):
-    if sdf_trunc < 0:
-        sdf_trunc = 4.0 * voxel_size
-
+def fuse_depths(tsdf_depths, views, render_dir, max_depth, voxel_size, sdf_trunc, bounds=None):
     volume = o3d.pipelines.integration.ScalableTSDFVolume(
         voxel_length=voxel_size,
         sdf_trunc=sdf_trunc,

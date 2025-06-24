@@ -86,7 +86,7 @@ def render_views(model, split, iteration, views, scene, pipeline, background, ar
             sobel_map = F.normalize(sobel_map, p=2, dim=-1) # (H, W, 3)
             dots = torch.sum(view_dirs * sobel_map, dim=-1) # (H, W)
             angles = torch.acos(dots.abs())
-            remove = angles > (80.0 / 180 * 3.14159)
+            remove = angles > (100.0 / 180 * 3.14159)
             tsdf_depth[remove] = 0.0
         fusion_depths.append(tsdf_depth.cpu())
 
@@ -129,17 +129,21 @@ def render_views(model, split, iteration, views, scene, pipeline, background, ar
         mesh_dir = model_dir / split / f"{args.label}_{iteration}" / "meshes"
         os.makedirs(mesh_dir, exist_ok=True)
 
+        max_depth = args.max_depth if args.max_depth > 0 else 2.0 * scene.cameras_extent
+        voxel_size = args.voxel_size if args.voxel_size > 0 else max_depth / 1024.0
+        sdf_trunc = args.sdf_trunc if args.sdf_trunc > 0 else 4.0 * voxel_size
+
         config = {
-            "voxel_size": args.voxel_size,
-            "max_depth": args.max_depth,
-            "sdf_trunc": args.sdf_trunc,
+            "max_depth": max_depth,
+            "voxel_size": voxel_size,
+            "sdf_trunc": sdf_trunc,
         }
         with open(mesh_dir / "config.json", "w") as f:
             json.dump(config, f, indent=4)
 
         tsdf_depths = torch.stack(fusion_depths, dim=0) # (N, H, W)
         tsdf_rgb_dir = rgb_render_dir if args.rgb_color else pbr_render_dir
-        volume = fuse_depths(tsdf_depths, views, tsdf_rgb_dir, args.max_depth, args.voxel_size, args.sdf_trunc, bounds)
+        volume = fuse_depths(tsdf_depths, views, tsdf_rgb_dir, max_depth, voxel_size, sdf_trunc, bounds)
 
         # Raw mesh
         print(f"[>] Extracting mesh from TSDF volume...")
@@ -166,8 +170,8 @@ if __name__ == "__main__":
     parser.add_argument("--skip_test", action="store_true")
     parser.add_argument("--quiet", action="store_true")
     parser.add_argument("--extract_mesh", action="store_true")
-    parser.add_argument("--max_depth", default=5.0, type=float)
-    parser.add_argument("--voxel_size", default=0.002, type=float)
+    parser.add_argument("--max_depth", default=-1, type=float)
+    parser.add_argument("--voxel_size", default=-1, type=float)
     parser.add_argument("--sdf_trunc", default=-1, type=float)
     parser.add_argument("--num_clusters", default=1, type=int)
     parser.add_argument("--filter_depth", action="store_true", help="Filter depth maps before TSDF fusion")
@@ -199,7 +203,11 @@ if __name__ == "__main__":
         args.rgb_color = True
 
     if args.tnt:
-        args.max_depth = 20.0
+        tnt_360_scenes = ['barn', 'caterpillar', 'ignatius', 'truck']
+        tnt_scene = Path(args.model_path).name.lower()
+        args.max_depth = 3.0 if tnt_scene in tnt_360_scenes else 4.5
+        print(f"[>] Using max_depth {args.max_depth} for TnT scene {tnt_scene}")
+
         args.num_clusters = 1
         args.filter_depth = True
         args.extract_mesh = True

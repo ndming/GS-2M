@@ -15,7 +15,8 @@ https://tanksandtemples.org/download/
 
 **Step 3**. Run the evaluation script and grab some coffee.
 ```
-python run.py --dataset-dir path/to/TanksAndTemples/evaluation/data/Ignatius --traj-path path/to/TanksAndTemples/evaluation/data/Ignatius/Ignatius_COLMAP_SfM.log --ply-path path/to/TanksAndTemples/evaluation/data/Ignatius/Ignatius_COLMAP.ply
+# firstly, run cull_mesh.py to cull mesh and then 
+./run.sh Barn
 ```
 Output (evaluation of Ignatius):
 ```

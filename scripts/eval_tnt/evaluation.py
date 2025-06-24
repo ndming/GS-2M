@@ -67,22 +67,29 @@ def EvaluateHisto(
     filename_mvs,
     plot_stretch,
     scene_name,
+    view_crop,
     verbose=True,
 ):
     print("[EvaluateHisto]")
     o3d.utility.set_verbosity_level(o3d.utility.VerbosityLevel.Debug)
     s = copy.deepcopy(source)
     s.transform(trans)
-    s = crop_volume.crop_point_cloud(s)
+    if crop_volume is not None:
+        s = crop_volume.crop_point_cloud(s)
+        if view_crop:
+            o3d.visualization.draw_geometries([s, ])
+    else:
+        print("No bounding box provided to crop estimated point cloud, leaving it as the loaded version!!")
     s = s.voxel_down_sample(voxel_size)
     s.estimate_normals(search_param=o3d.geometry.KDTreeSearchParamKNN(knn=20))
     print(filename_mvs + "/" + scene_name + ".precision.ply")
-    
-    # path = filename_mvs + "/" + scene_name + ".source.ply"
-    # o3d.io.write_point_cloud(path, source)
 
     t = copy.deepcopy(target)
-    t = crop_volume.crop_point_cloud(t)
+    if crop_volume is not None:
+        t = crop_volume.crop_point_cloud(t)
+    else:
+        print("No bounding box provided to crop groundtruth point cloud, leaving it as the loaded version!!")
+
     t = t.voxel_down_sample(voxel_size)
     t.estimate_normals(search_param=o3d.geometry.KDTreeSearchParamKNN(knn=20))
     print("[compute_point_cloud_to_point_cloud_distance]")
@@ -107,10 +114,10 @@ def EvaluateHisto(
     # )
     # o3d.io.write_point_cloud(filename_mvs + "/" + scene_name + ".recall.ply", t)
 
-    # source_n_fn = filename_mvs + "/" + scene_name + ".precision.ply"
-    # target_n_fn = filename_mvs + "/" + scene_name + ".recall.ply"
+    source_n_fn = filename_mvs + "/" + scene_name + ".precision.ply"
+    target_n_fn = filename_mvs + "/" + scene_name + ".recall.ply"
 
-    # print("[ViewDistances] Add color coding to visualize error")
+    print("[ViewDistances] Add color coding to visualize error")
     # eval_str_viewDT = (
     #     OPEN3D_EXPERIMENTAL_BIN_PATH
     #     + "ViewDistances "
@@ -120,9 +127,9 @@ def EvaluateHisto(
     #     + " --write_color_back --without_gui"
     # )
     # os.system(eval_str_viewDT)
-    # write_color_distances(source_n_fn, s, distance1, 3 * threshold)
+    write_color_distances(source_n_fn, s, distance1, 3 * threshold)
 
-    # print("[ViewDistances] Add color coding to visualize error")
+    print("[ViewDistances] Add color coding to visualize error")
     # eval_str_viewDT = (
     #     OPEN3D_EXPERIMENTAL_BIN_PATH
     #     + "ViewDistances "
@@ -132,7 +139,7 @@ def EvaluateHisto(
     #     + " --write_color_back --without_gui"
     # )
     # os.system(eval_str_viewDT)
-    # write_color_distances(target_n_fn, t, distance2, 3 * threshold)
+    write_color_distances(target_n_fn, t, distance2, 3 * threshold)
 
     # get histogram and f-score
     [
