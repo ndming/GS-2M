@@ -119,7 +119,8 @@ def render_views(model, split, iteration, views, scene, pipeline, background, ar
             occlusion=torch.ones_like(roughness_map).permute(1, 2, 0),
             irradiance=torch.zeros_like(roughness_map).permute(1, 2, 0),
             brdf_lut=scene.brdf_lut,
-            gamma=model.gamma)
+            gamma=model.gamma,
+            white_background=model.white_background)
 
         pbr_render = pbr_pkg["render_rgb"].clamp(0.0, 1.0).permute(2, 0, 1) # (3, H, W)
         pbr_render = torch.where(normal_mask, pbr_render, background[:, None, None])

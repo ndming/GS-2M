@@ -38,7 +38,7 @@ def train(model, opt, pipe, test_iterations, save_iterations, checkpoint_iterati
     gaussians = GaussianModel(model.sh_degree)
     scene = Scene(model, gaussians)
     gaussians.training_setup(opt)
-    scene.training_setup(opt, model.mask_gt)
+    scene.training_setup(opt, model.mask_gt, model.white_background)
     canonical_rays = F.normalize(scene.get_canonical_rays(), p=2, dim=-1)
 
     first_iter = 0
@@ -156,7 +156,8 @@ def train(model, opt, pipe, test_iterations, save_iterations, checkpoint_iterati
                 occlusion=torch.ones_like(roughness_map).permute(1, 2, 0),
                 irradiance=torch.zeros_like(roughness_map).permute(1, 2, 0),
                 brdf_lut=scene.brdf_lut,
-                gamma=model.gamma)
+                gamma=model.gamma,
+                white_background=model.white_background)
 
             render_pbr = pbr_pkg["render_rgb"].permute(2, 0, 1) # (3, H, W)
             render_pbr = torch.where(normal_mask, render_pbr, background[:, None, None])

@@ -223,6 +223,7 @@ def readCamerasFromTransforms(path, transformsfile, depth_dir, white_background,
             pil_image = Image.open(image_path)
             bg_color = np.array([1, 1, 1]) if white_background else np.array([0, 0, 0])
             image = convert_background_color(pil_image, bg_color)
+            image.filename = pil_image.filename
             focal = fov2focal(fovx, image.size[0])
 
             depth_path = os.path.join(depth_dir, f"{image_stem}.png") if depth_dir != "" else ""

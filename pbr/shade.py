@@ -114,11 +114,10 @@ def pbr_shading(
     irradiance: Optional[torch.Tensor] = None,  # [H, W, 1]
     metallic: Optional[torch.Tensor] = None,
     brdf_lut: Optional[torch.Tensor] = None,
-    background: Optional[torch.Tensor] = None,
+    white_background = False,
 ) -> Dict:
     H, W, _ = normals.shape
-    if background is None:
-        background = torch.zeros_like(normals)  # [H, W, 3]
+    background = torch.ones_like(normals) if white_background else torch.zeros_like(normals)  # [H, W, 3]
 
     # prepare
     normals = normals.reshape(1, H, W, 3)

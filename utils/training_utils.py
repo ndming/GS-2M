@@ -62,8 +62,9 @@ def report_training(
         validation_configs = (
             {'name': 'test',  'cameras': scene.getTestCameras()}, 
             {'name': 'train', 'cameras': [scene.getTrainCameras()[idx % len(scene.getTrainCameras())] for idx in range(5, 30, 5)]})
-        
+
         _, background = render_args
+        white_bg = torch.all(background == 1).item()
         for config in validation_configs:
             if config['cameras'] and len(config['cameras']) > 0:
                 l1_test_rgb = 0.0
@@ -106,7 +107,8 @@ def report_training(
                         occlusion=torch.ones_like(roughness_map).permute(1, 2, 0),
                         irradiance=torch.zeros_like(roughness_map).permute(1, 2, 0),
                         brdf_lut=scene.brdf_lut,
-                        gamma=gamma)
+                        gamma=gamma,
+                        white_background=white_bg)
                     
                     diffuse_map = pbr_pkg["diffuse_rgb"].clamp(0.0, 1.0).permute(2, 0, 1) # (3, H, W)
                     specular_map = pbr_pkg["specular_rgb"].clamp(0.0, 1.0).permute(2, 0, 1) # (3, H, W)
@@ -149,9 +151,9 @@ def report_training(
                 l1_test_pbr /= len(config['cameras'])
 
                 if not pbr_stats:
-                    tqdm.write(f"[ITER {iteration:>5}] Evaluating {config['name']} (RGB): L1 - {l1_test_rgb:.4f} | PSNR - {psnr_test_rgb:.2f}")
+                    tqdm.write(f"[ITER {iteration:>5}] Evaluating {config['name']:>5} (RGB): L1 - {l1_test_rgb:.4f} | PSNR - {psnr_test_rgb:.2f}")
                 else:
-                    tqdm.write(f"[ITER {iteration:>5}] Evaluating {config['name']} (PBR): L1 - {l1_test_pbr:.4f} | PSNR - {psnr_test_pbr:.2f}")
+                    tqdm.write(f"[ITER {iteration:>5}] Evaluating {config['name']:>5} (PBR): L1 - {l1_test_pbr:.4f} | PSNR - {psnr_test_pbr:.2f}")
 
                 if tb_writer:
                     tb_writer.add_scalar(config['name'] + '/loss_viewpoint - l1_loss_rgb', l1_test_rgb, iteration)

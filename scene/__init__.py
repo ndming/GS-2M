@@ -27,7 +27,7 @@ from pbr import CubemapLight, get_brdf_lut
 from utils.graphics_utils import get_envmap_dirs
 from utils.system_utils import searchForMaxIteration
 from utils.camera_utils import cameraList_from_camInfos, camera_to_JSON
-from utils.image_utils import process_input_image
+from utils.image_utils import process_input_image, convert_background_color
 
 class Scene:
     gaussians : GaussianModel
@@ -120,12 +120,12 @@ class Scene:
     def getTestCameras(self, scale=1.0):
         return self.test_cameras[scale]
 
-    def training_setup(self, opt, mask_gt=False, resolution_scale=1.0):
+    def training_setup(self, opt, mask_gt=False, white_bg=False, resolution_scale=1.0):
         print("[>] Populating camera neighbors")
         self._populate_neareast_cameras(opt, resolution_scale)
 
         print("[>] Populating gray images")
-        self._populate_gray_images(mask_gt, opt.multi_view_ncc_scale, resolution_scale)
+        self._populate_gray_images(mask_gt, white_bg, opt.multi_view_ncc_scale, resolution_scale)
 
         self.cubemap.train()
         param_groups = [
@@ -162,14 +162,16 @@ class Scene:
             for index in sorted_indices[:multi_view_num]:
                 cur_cam.nearest_indices.append(index)
 
-    def _populate_gray_images(self, mask_gt, ncc_scale, resolution_scale):
+    def _populate_gray_images(self, mask_gt, white_bg, ncc_scale, resolution_scale):
         for cam in self.train_cameras[resolution_scale]:
             rgb = cam.gt_image
             if ncc_scale != 1.0:
                 pil_image = Image.open(cam.image_path)
+                bg_color = np.array([1, 1, 1]) if white_bg else np.array([0, 0, 0])
+                image = convert_background_color(pil_image, bg_color)
                 pil_mask = None if cam.mask_path is None else Image.open(cam.mask_path).convert("L")
                 res = int(cam.image_width / ncc_scale), int(cam.image_height / ncc_scale)
-                rgb, _ = process_input_image(pil_image, res, mask_gt, pil_mask) # (C, H, W)
+                rgb, _ = process_input_image(image, res, mask_gt, pil_mask) # (C, H, W)
                 rgb = rgb[:3, ...].to(cam.data_device)
             gray = rgb[0:1, ...] * 0.299 + rgb[1:2, ...] * 0.587 + rgb[2:3, ...] * 0.114 # (1, H, W)
             cam.gray_image = gray.to(cam.data_device)
