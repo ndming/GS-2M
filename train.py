@@ -28,7 +28,7 @@ import nvdiffrast.torch as dr
 import torch.nn.functional as F
 
 from utils.general_utils import safe_state
-from utils.loss_utils import l1_loss, planar_loss, sparse_loss, depth_normal_loss, delta_normal_loss, tv_loss, masked_tv_loss, multi_view_loss
+from utils.loss_utils import l1_loss, planar_loss, sparse_loss, tv_loss, masked_tv_loss, weighted_tv_loss, multi_view_loss
 from utils.training_utils import prepare_outdir, prepare_logger, report_training
 
 def train(model, opt, pipe, test_iterations, save_iterations, checkpoint_iterations, checkpoint):
@@ -100,21 +100,35 @@ def train(model, opt, pipe, test_iterations, save_iterations, checkpoint_iterati
 
         # Total loss
         loss = opt.lambda_planar * Lplanar + opt.lambda_sparse * Lsparse
-        loss += Lrgb
+        if not material_stage:
+            loss += Lrgb
 
         # Geometry losses
         Lgeo = torch.tensor([0.0])
         if geometry_stage:
             lambda_dn = opt.lambda_depth_normal
-            Ldn = depth_normal_loss(render_pkg["normal_map"], render_pkg["sobel_normal_map"], gt_image)
+            # Ldn = depth_normal_loss(render_pkg["normal_map"], render_pkg["sobel_normal_map"], gt_image)
+            # Ldn = (render_pkg["sobel_normal_map"] - render_pkg["normal_map"]).abs().sum(dim=0).mean()
 
             lambda_tv = opt.lambda_tv_normal
             # n_map = render_pkg["normal_map"] # (3, H, W)
             # n_map = torch.where(torch.norm(n_map, dim=0, keepdim=True) > 0, F.normalize(n_map, dim=0, p=2), n_map)
-            Ltv = tv_loss(gt_image, render_pkg["normal_map"])
+            # Ltv = tv_loss(gt_image, render_pkg["normal_map"])
 
             lambda_mv = opt.lambda_multi_view # expensive, only call if needed
             Lmv = 0.0 if lambda_mv == 0.0 else multi_view_loss(scene, viewpoint_cam, opt, render_pkg, pipe, background)
+
+            if "roughness_map" in render_pkg:
+                roughness_map = render_pkg["roughness_map"].squeeze() # (H, W)
+                weight_map = (roughness_map - roughness_map.min()) / (roughness_map.max() - roughness_map.min() + 1e-8)
+                weight_map = weight_map.detach()
+
+                Ldn = (weight_map * (render_pkg["sobel_normal_map"] - render_pkg["normal_map"]).abs().sum(dim=0)).mean()
+                Ltv = weighted_tv_loss(weight_map[None], gt_image, render_pkg["normal_map"])
+
+            else:
+                Ldn = (render_pkg["sobel_normal_map"] - render_pkg["normal_map"]).abs().sum(dim=0).mean()
+                Ltv = tv_loss(gt_image, render_pkg["normal_map"])
 
             Lgeo = lambda_dn * Ldn + lambda_mv * Lmv + lambda_tv * Ltv
             loss += Lgeo
