@@ -126,7 +126,7 @@ class OptimizationParams(ParamGroup):
         self.geometry_from_iter = 5000
         self.material_from_iter = 15_000
         self.mv_angle_threshold = 30
-        self.mv_angle_factor = 1.0
+        self.mv_angle_factor = 2.0
         self.mv_occlusion_threshold = 5e-4
         self.mv_pixel_weight_decay = 3.0
         self.lambda_multi_view = 1.0
