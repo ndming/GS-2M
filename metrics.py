@@ -35,78 +35,57 @@ def read_images(renders_dir, gt_dir):
         image_names.append(fname)
     return renders, gts, image_names
 
-def evaluate(model_paths, split, methods, rgb_eval):
-    full_dict = {}
-    per_view_dict = {}
-    full_dict_polytopeonly = {}
-    per_view_dict_polytopeonly = {}
+def evaluate(model_path, split, method, rgb_eval):
+    split_dir = Path(model_path) / split
+    if not split_dir.exists():
+        raise FileNotFoundError(f"Split directory {split_dir} does not exist, did you forget to specify --split?.")
 
-    for scene_dir in model_paths:
-        try:
-            print("[>] Scene:", scene_dir)
-            full_dict[scene_dir] = {}
-            per_view_dict[scene_dir] = {}
-            full_dict_polytopeonly[scene_dir] = {}
-            per_view_dict_polytopeonly[scene_dir] = {}
+    method_dir = split_dir / method
+    gt_dir = method_dir/ "gts"
+    render_dir = method_dir / "rgb_renders" if rgb_eval else method_dir / "pbr_renders"
+    renders, gts, _ = read_images(render_dir, gt_dir)
 
-            test_dir = Path(scene_dir) / split
-            if not test_dir.exists():
-                raise FileNotFoundError()
+    ssims = []
+    psnrs = []
+    lpipss = []
 
-            for method in os.listdir(test_dir) if len(methods) == 0 else methods:
-                print("[>] Method:", method)
+    print(f"[>] Evaluate metrics for: {method_dir}")
 
-                full_dict[scene_dir][method] = {}
-                per_view_dict[scene_dir][method] = {}
-                full_dict_polytopeonly[scene_dir][method] = {}
-                per_view_dict_polytopeonly[scene_dir][method] = {}
+    for idx in tqdm(range(len(renders)), desc="[>] Evaluating", ncols=80):
+        ssims.append(ssim(renders[idx], gts[idx]))
+        psnrs.append(psnr(renders[idx], gts[idx]))
+        lpipss.append(lpips(renders[idx], gts[idx], net_type='vgg'))
 
-                method_dir = test_dir / method
-                gt_dir = method_dir/ "gts"
-                renders_dir = method_dir / "rgb_renders" if rgb_eval else method_dir / "pbr_renders"
-                renders, gts, image_names = read_images(renders_dir, gt_dir)
+    print("[-] SSIM : {:>12.7f}".format(torch.tensor(ssims).mean(), ".5"))
+    print("[-] PSNR : {:>12.7f}".format(torch.tensor(psnrs).mean(), ".5"))
+    print("[-] LPIPS: {:>12.7f}".format(torch.tensor(lpipss).mean(), ".5"))
 
-                ssims = []
-                psnrs = []
-                lpipss = []
+    metrics = {}
+    metric_file = Path(model_path) / "metrics.json"
+    if metric_file.exists():
+        with open(metric_file, 'r') as f:
+            metrics = json.load(f)
 
-                for idx in tqdm(range(len(renders)), desc="[>] Evaluating", ncols=80):
-                    ssims.append(ssim(renders[idx], gts[idx]))
-                    psnrs.append(psnr(renders[idx], gts[idx]))
-                    lpipss.append(lpips(renders[idx], gts[idx], net_type='vgg'))
+    metrics[method] = {
+        "ssim": torch.tensor(ssims).mean().item(),
+        "psnr": torch.tensor(psnrs).mean().item(),
+        "lpips": torch.tensor(lpipss).mean().item(),
+    }
 
-                print("[-] SSIM : {:>12.7f}".format(torch.tensor(ssims).mean(), ".5"))
-                print("[-] PSNR : {:>12.7f}".format(torch.tensor(psnrs).mean(), ".5"))
-                print("[-] LPIPS: {:>12.7f}".format(torch.tensor(lpipss).mean(), ".5"))
+    with open(metric_file, 'w') as f:
+        json.dump(metrics, f, indent=4)
 
-                full_dict[scene_dir][method].update({
-                    "SSIM": torch.tensor(ssims).mean().item(),
-                    "PSNR": torch.tensor(psnrs).mean().item(),
-                    "LPIPS": torch.tensor(lpipss).mean().item()})
-
-                per_view_dict[scene_dir][method].update({
-                    "SSIM": {name: ssim for ssim, name in zip(torch.tensor(ssims).tolist(), image_names)},
-                    "PSNR": {name: psnr for psnr, name in zip(torch.tensor(psnrs).tolist(), image_names)},
-                    "LPIPS": {name: lp for lp, name in zip(torch.tensor(lpipss).tolist(), image_names)}})
-
-            with open(scene_dir + "/results.json", 'w') as fp:
-                json.dump(full_dict[scene_dir], fp, indent=True)
-            with open(scene_dir + "/per_view.json", 'w') as fp:
-                json.dump(per_view_dict[scene_dir], fp, indent=True)
-        except FileNotFoundError:
-            print(f"[!] Could not open: {scene_dir}/{split}, did you forget the --split argument?")
-        except:
-            print("[!] Unable to compute metrics for model", scene_dir)
+    print(f"[>] Metrics saved to: {metric_file}")
 
 if __name__ == "__main__":
     device = torch.device("cuda:0")
     torch.cuda.set_device(device)
 
     parser = ArgumentParser(description="Training script parameters")
-    parser.add_argument('--model_paths', '-m', required=True, nargs="+", type=str, default=[])
+    parser.add_argument('--model_path', '-m', required=True, type=str)
     parser.add_argument('--split', type=str, default="test", help="Split to evaluate on (train/test)")
-    parser.add_argument('--methods', nargs="+", type=str, default=[], help="Methods to evaluate, empty for all")
+    parser.add_argument('--method', type=str, default="ours_30000")
     parser.add_argument('--rgb_eval', action='store_true', help="Use RGB evaluation instead of PBR")
 
     args = parser.parse_args()
-    evaluate(args.model_paths, args.split, args.methods, args.rgb_eval)
+    evaluate(args.model_path, args.split, args.method, args.rgb_eval)

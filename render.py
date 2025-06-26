@@ -57,6 +57,16 @@ def render_views(model, split, iteration, views, scene, pipeline, background, ar
     envmap = scene.cubemap.export_envmap(return_img=True).permute(2, 0, 1).clamp(0.0, 1.0) # (3, H, W)
     torchvision.utils.save_image(envmap, model_dir / split / f"{args.label}_{iteration}" / "envmap.png")
 
+    # Save number of points
+    points = {}
+    point_file = model_dir / "points.json"
+    if point_file.exists():
+        with open(point_file, "r") as f:
+            points = json.load(f)
+    points[f"{args.label}_{iteration}"] = scene.gaussians.get_xyz.shape[0]
+    with open(point_file, "w") as f:
+        json.dump(points, f, indent=4)
+
     fusion_depths = []
     for view in tqdm(views, desc="[>] Rendering", ncols=80):
         render_pkg = render(
