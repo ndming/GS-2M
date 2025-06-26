@@ -28,7 +28,7 @@ import nvdiffrast.torch as dr
 import torch.nn.functional as F
 
 from utils.general_utils import safe_state
-from utils.loss_utils import l1_loss, planar_loss, sparse_loss, tv_loss, masked_tv_loss, weighted_tv_loss, multi_view_loss
+from utils.loss_utils import l1_loss, planar_loss, sparse_loss, tv_loss, masked_tv_loss, weighted_tv_loss, multi_view_loss, depth_tv_loss
 from utils.training_utils import prepare_outdir, prepare_logger, report_training
 
 def train(model, opt, pipe, test_iterations, save_iterations, checkpoint_iterations, checkpoint):
@@ -120,8 +120,10 @@ def train(model, opt, pipe, test_iterations, save_iterations, checkpoint_iterati
 
             if "roughness_map" in render_pkg:
                 roughness_map = render_pkg["roughness_map"].squeeze() # (H, W)
-                weight_map = (roughness_map - roughness_map.min()) / (roughness_map.max() - roughness_map.min() + 1e-8)
-                weight_map = weight_map.detach()
+                weight_map = roughness_map.clamp(0, 1).detach()
+
+                # smooth_map = (1.0 - roughness_map).clamp(0, 1).detach()
+                # Lds = depth_tv_loss(render_pkg["depth_map"], smooth_map)
 
                 Ldn = (weight_map * (render_pkg["sobel_normal_map"] - render_pkg["normal_map"]).abs().sum(dim=0)).mean()
                 Ltv = weighted_tv_loss(weight_map[None], gt_image, render_pkg["normal_map"])
@@ -161,7 +163,7 @@ def train(model, opt, pipe, test_iterations, save_iterations, checkpoint_iterati
 
             pbr_pkg = pbr_shading(
                 light=scene.cubemap,
-                normals=normal_map.permute(1, 2, 0), # (H, W, 3)
+                normals=normal_map.permute(1, 2, 0).detach(), # (H, W, 3)
                 view_dirs=view_dirs,
                 mask=normal_mask.permute(1, 2, 0), # (H, W, 1)
                 albedo=albedo_map.permute(1, 2, 0), # (H, W, 3)

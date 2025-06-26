@@ -244,6 +244,8 @@ def multi_view_loss(scene, viewpoint_cam, opt, render_pkg, pipe, bg_color):
         rough_vals = rough_vals.squeeze() # (N,) valid_indices
         if (~ncc_mask).sum() > 0:
             ncc_loss += 0.02 * rough_vals[~ncc_mask].mean()
+        if ncc_mask.sum() > 0:
+            ncc_loss -= 0.02 * rough_vals[ncc_mask].mean()
 
     return w_geo * geo_loss + w_ncc * ncc_loss
 
@@ -544,4 +546,12 @@ def weighted_tv_loss(
 
     tv_loss = (tv_h * rgb_grad_h * weight_h).mean() + (tv_w * rgb_grad_w * weight_w).mean()
     return tv_loss
+
+def depth_tv_loss(depth_map, weight_map):
+    # inputs: (H, W)
+    dx = torch.abs(depth_map[:, 1:] - depth_map[:, :-1])
+    dy = torch.abs(depth_map[1:, :] - depth_map[:-1, :])
+    wx = weight_map[:, 1:] * weight_map[:, :-1]
+    wy = weight_map[1:, :] * weight_map[:-1, :]
+    return (wx * dx).mean() + (wy * dy).mean()
 
