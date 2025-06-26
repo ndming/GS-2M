@@ -38,7 +38,7 @@ def train(model, opt, pipe, test_iterations, save_iterations, checkpoint_iterati
     gaussians = GaussianModel(model.sh_degree)
     scene = Scene(model, gaussians)
     gaussians.training_setup(opt)
-    scene.training_setup(opt, model.mask_gt, model.white_background)
+    scene.training_setup(opt, model)
     canonical_rays = F.normalize(scene.get_canonical_rays(), p=2, dim=-1)
 
     first_iter = 0
@@ -107,29 +107,28 @@ def train(model, opt, pipe, test_iterations, save_iterations, checkpoint_iterati
         Lgeo = torch.tensor([0.0])
         if geometry_stage:
             lambda_dn = opt.lambda_depth_normal
-            # Ldn = depth_normal_loss(render_pkg["normal_map"], render_pkg["sobel_normal_map"], gt_image)
-            # Ldn = (render_pkg["sobel_normal_map"] - render_pkg["normal_map"]).abs().sum(dim=0).mean()
+            Ldn = (render_pkg["sobel_normal_map"] - render_pkg["normal_map"]).abs().sum(dim=0).mean()
 
-            lambda_tv = opt.lambda_tv_normal
             # n_map = render_pkg["normal_map"] # (3, H, W)
             # n_map = torch.where(torch.norm(n_map, dim=0, keepdim=True) > 0, F.normalize(n_map, dim=0, p=2), n_map)
             # Ltv = tv_loss(gt_image, render_pkg["normal_map"])
 
             lambda_mv = opt.lambda_multi_view # expensive, only call if needed
-            Lmv = 0.0 if lambda_mv == 0.0 else multi_view_loss(scene, viewpoint_cam, opt, render_pkg, pipe, background)
+            mv_args = (scene, viewpoint_cam, opt, render_pkg, pipe, background, material_stage)
+            Lmv = 0.0 if lambda_mv == 0.0 else multi_view_loss(*mv_args)
 
-            if "roughness_map" in render_pkg:
+            lambda_tv = opt.lambda_tv_normal
+            if material_stage:
                 roughness_map = render_pkg["roughness_map"] # (1, H, W)
-                weight_map = roughness_map.clamp(0, 1).detach()
+                # weight_map = roughness_map.clamp(0, 1).detach()
                 smooth_map = (1.0 - roughness_map).clamp(0, 1).detach()
 
-                Ldn = (weight_map * (render_pkg["sobel_normal_map"] - render_pkg["normal_map"]).abs().sum(dim=0)).mean()
+                # Ldn = (weight_map * (render_pkg["sobel_normal_map"] - render_pkg["normal_map"]).abs().sum(dim=0)).mean()
                 Ltv_n = weighted_tv_loss(render_pkg["normal_map"], smooth_map)
                 Ltv_d = weighted_tv_loss(render_pkg["depth_map"], smooth_map)
                 Ltv = Ltv_n + Ltv_d
 
             else:
-                Ldn = (render_pkg["sobel_normal_map"] - render_pkg["normal_map"]).abs().sum(dim=0).mean()
                 Ltv = tv_loss(gt_image, render_pkg["normal_map"])
 
             Lgeo = lambda_dn * Ldn + lambda_mv * Lmv + lambda_tv * Ltv
@@ -185,15 +184,15 @@ def train(model, opt, pipe, test_iterations, save_iterations, checkpoint_iterati
             Lsm = masked_tv_loss(normal_mask, gt_image, arm) if (normal_mask == 0).sum() > 0 else tv_loss(gt_image, arm)
 
             # Environment light loss
-            # envmap = dr.texture(
-            #     scene.cubemap.base[None, ...], scene.envmap_dirs[None, ...].contiguous(),
-            #     filter_mode="linear", boundary_mode="cube")[0] # (H, W, 3)
-            # tv_h1 = torch.pow(envmap[1:, :, :] - envmap[:-1, :, :], 2).mean()
-            # tv_w1 = torch.pow(envmap[:, 1:, :] - envmap[:, :-1, :], 2).mean()
-            # lambda_tv_envmap = opt.lambda_tv_envmap
-            # Lenv = tv_h1 + tv_w1
+            envmap = dr.texture(
+                scene.cubemap.base[None, ...], scene.envmap_dirs[None, ...].contiguous(),
+                filter_mode="linear", boundary_mode="cube")[0] # (H, W, 3)
+            tv_h1 = torch.pow(envmap[1:, :, :] - envmap[:-1, :, :], 2).mean()
+            tv_w1 = torch.pow(envmap[:, 1:, :] - envmap[:, :-1, :], 2).mean()
+            lambda_tv_envmap = opt.lambda_tv_envmap
+            Lenv = tv_h1 + tv_w1
 
-            Lmat = Lpbr + lambda_tv_smooth * Lsm # + lambda_tv_envmap * Lenv
+            Lmat = Lpbr + lambda_tv_smooth * Lsm + lambda_tv_envmap * Lenv
             loss += Lmat
 
         loss.backward()

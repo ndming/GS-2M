@@ -110,7 +110,7 @@ class OptimizationParams(ParamGroup):
         self.multi_view_num = 8
         self.multi_view_ncc_weight = 0.15
         self.multi_view_geo_weight = 0.03
-        self.multi_view_ncc_scale = 0.5
+        self.multi_view_ncc_scale = -1.0
         self.multi_view_max_angle = 30
         self.multi_view_min_angle = 10
         self.multi_view_min_dist = 0.01
@@ -120,7 +120,7 @@ class OptimizationParams(ParamGroup):
         self.multi_view_patch_size = 3
         # GS-IR/GS-ROR
         self.lambda_tv_normal = 0.1
-        self.lambda_tv_smooth = 0.05
+        self.lambda_tv_smooth = 0.01
         self.lambda_tv_envmap = 0.01
         # Ours
         self.geometry_from_iter = 5000

@@ -131,7 +131,7 @@ def _get_img_grad_weight(img):
     grad_img = torch.nn.functional.pad(grad_img[None, None], (1, 1, 1, 1), mode='constant', value=1.0).squeeze()
     return grad_img
 
-def multi_view_loss(scene, viewpoint_cam, opt, render_pkg, pipe, bg_color):
+def multi_view_loss(scene, viewpoint_cam, opt, render_pkg, pipe, bg_color, material_stage):
     nearest_indices = viewpoint_cam.nearest_indices
     nearest_cam = None if len(nearest_indices) == 0 else scene.getTrainCameras()[random.sample(nearest_indices, 1)[0]]
     if nearest_cam is None:
@@ -178,11 +178,9 @@ def multi_view_loss(scene, viewpoint_cam, opt, render_pkg, pipe, bg_color):
 
     pixel_loss = (weights * pixel_noise)[pixel_valid].mean() if pixel_valid.sum() > 0 else 0.0
     angle_loss = (weights * angle_noise)[angle_valid].mean() if angle_valid.sum() > 0 else 0.0
-
-    w_geo = opt.multi_view_geo_weight
     geo_loss = pixel_loss + angle_loss
 
-    ncc_scale = opt.multi_view_ncc_scale
+    ncc_scale = scene.ncc_scale
     with torch.no_grad():
         mask = pixel_valid.reshape(-1)
         valid_indices = torch.arange(mask.shape[0], device=mask.device)[mask]
@@ -229,11 +227,9 @@ def multi_view_loss(scene, viewpoint_cam, opt, render_pkg, pipe, bg_color):
     ncc_mask = ncc_mask.reshape(-1)
     ncc = ncc.reshape(-1) * weights
     ncc = ncc[ncc_mask].squeeze()
-
-    w_ncc = opt.multi_view_ncc_weight
     ncc_loss = ncc.mean() if ncc_mask.sum() > 0 else 0.0
 
-    if "roughness_map" in render_pkg:
+    if material_stage:
         roughness_map = render_pkg["roughness_map"] # (1, H, W)
         h_rough, w_rough = roughness_map.squeeze().shape
         grid_rough = pixels.reshape(-1, 1, 2).float()
@@ -247,6 +243,13 @@ def multi_view_loss(scene, viewpoint_cam, opt, render_pkg, pipe, bg_color):
         if ncc_mask.sum() > 0:
             ncc_loss -= 0.02 * rough_vals[ncc_mask].mean()
 
+        # rough_weights = (1.0 - rough_vals).clamp(0.0, 1.0).detach()
+        # pixel_loss = 0.2 * (rough_weights * pixel_noise[valid_indices]).mean() if valid_indices.sum() > 0 else 0.0
+        # angle_loss = 0.2 * (rough_weights * angle_noise[valid_indices]).mean() if valid_indices.sum() > 0 else 0.0
+        # geo_loss = pixel_loss + angle_loss
+
+    w_geo = opt.multi_view_geo_weight
+    w_ncc = opt.multi_view_ncc_weight
     return w_geo * geo_loss + w_ncc * ncc_loss
 
 def _get_points_from_depth(camera, depth_map, scale=1):
@@ -506,14 +509,12 @@ def masked_tv_loss(
     prediction: torch.Tensor,  # [C, H, W]
     erosion: bool = False,
 ) -> torch.Tensor:
-    rgb_grad_h = torch.exp(
-        -(gt_image[:, 1:, :] - gt_image[:, :-1, :]).abs().mean(dim=0, keepdim=True)
-    )  # [1, H-1, W]
-    rgb_grad_w = torch.exp(
-        -(gt_image[:, :, 1:] - gt_image[:, :, :-1]).abs().mean(dim=0, keepdim=True)
-    )  # [1, H-1, W]
-    tv_h = torch.pow(prediction[:, 1:, :] - prediction[:, :-1, :], 2)  # [C, H-1, W]
-    tv_w = torch.pow(prediction[:, :, 1:] - prediction[:, :, :-1], 2)  # [C, H, W-1]
+    rgb_grad_h = torch.exp(-(gt_image[:, 1:, :] - gt_image[:, :-1, :]).abs().mean(dim=0, keepdim=True)) # (1, H-1, W)
+    rgb_grad_w = torch.exp(-(gt_image[:, :, 1:] - gt_image[:, :, :-1]).abs().mean(dim=0, keepdim=True)) # (1, H-1, W)
+    # tv_h = torch.pow(prediction[:, 1:, :] - prediction[:, :-1, :], 2) # (C, H-1, W)
+    # tv_w = torch.pow(prediction[:, :, 1:] - prediction[:, :, :-1], 2) # (C, H, W-1)
+    tv_w = torch.abs(prediction[:, :, 1:] - prediction[:, :, :-1]).sum(dim=0, keepdim=True) # (C, H, W-1)
+    tv_h = torch.abs(prediction[:, 1:, :] - prediction[:, :-1, :]).sum(dim=0, keepdim=True) # (C, H-1, W)
 
     # erode mask
     mask = mask.float()
@@ -550,16 +551,16 @@ def masked_tv_loss(
 def weighted_tv_loss(tensor: torch.Tensor, weight_map: torch.Tensor):
     """
     Computes total variation loss (absolute difference) with multiplicative spatial weights.
-    Works for [C, H, W] tensors and [1, H, W] weight maps.
+    Works for (C, H, W) tensors and (1, H, W) weight maps.
     """
 
     # Compute spatial differences
-    dx = torch.abs(tensor[:, :, 1:] - tensor[:, :, :-1]).sum(dim=0, keepdim=True)  # [1, H, W-1]
-    dy = torch.abs(tensor[:, 1:, :] - tensor[:, :-1, :]).sum(dim=0, keepdim=True)  # [1, H-1, W]
+    dx = torch.abs(tensor[:, :, 1:] - tensor[:, :, :-1]).sum(dim=0, keepdim=True) # (C, H, W-1)
+    dy = torch.abs(tensor[:, 1:, :] - tensor[:, :-1, :]).sum(dim=0, keepdim=True) # (C, H-1, W)
 
     # Compute multiplicative weights
-    wx = weight_map[:, :, 1:] * weight_map[:, :, :-1]  # [1, H, W-1]
-    wy = weight_map[:, 1:, :] * weight_map[:, :-1, :]  # [1, H-1, W]
+    wx = weight_map[:, :, 1:] * weight_map[:, :, :-1] # (1, H, W-1)
+    wy = weight_map[:, 1:, :] * weight_map[:, :-1, :] # (1, H-1, W)
 
     # Apply and average
     loss_x = (dx * wx).mean()

@@ -120,12 +120,20 @@ class Scene:
     def getTestCameras(self, scale=1.0):
         return self.test_cameras[scale]
 
-    def training_setup(self, opt, mask_gt=False, white_bg=False, resolution_scale=1.0):
+    def training_setup(self, opt, model, resolution_scale=1.0):
         print("[>] Populating camera neighbors")
         self._populate_neareast_cameras(opt, resolution_scale)
 
+        if opt.multi_view_ncc_scale > 0:
+            self.ncc_scale = opt.multi_view_ncc_scale
+        elif model.resolution in [1, 2, 4, 8]:
+            self.ncc_scale = 1.0 / model.resolution
+        else:
+            self.ncc_scale = 1.0
+        print(f"[>] Using NCC scale: {self.ncc_scale:.2f}")
+
         print("[>] Populating gray images")
-        self._populate_gray_images(mask_gt, white_bg, opt.multi_view_ncc_scale, resolution_scale)
+        self._populate_gray_images(model.mask_gt, model.white_background, resolution_scale)
 
         self.cubemap.train()
         param_groups = [
@@ -162,9 +170,10 @@ class Scene:
             for index in sorted_indices[:multi_view_num]:
                 cur_cam.nearest_indices.append(index)
 
-    def _populate_gray_images(self, mask_gt, white_bg, ncc_scale, resolution_scale):
+    def _populate_gray_images(self, mask_gt, white_bg, resolution_scale):
         for cam in self.train_cameras[resolution_scale]:
             rgb = cam.gt_image
+            ncc_scale = self.ncc_scale
             if ncc_scale != 1.0:
                 pil_image = Image.open(cam.image_path)
                 bg_color = np.array([1, 1, 1]) if white_bg else np.array([0, 0, 0])
