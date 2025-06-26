@@ -527,31 +527,43 @@ def masked_tv_loss(
 
     return tv_loss
 
-def weighted_tv_loss(
-    weight_map: torch.Tensor,  # [1, H, W]
-    gt_image: torch.Tensor,    # [3, H, W]
-    prediction: torch.Tensor,  # [C, H, W]
-) -> torch.Tensor:
-    rgb_grad_h = torch.exp(
-        -(gt_image[:, 1:, :] - gt_image[:, :-1, :]).abs().mean(dim=0, keepdim=True)
-    )  # [1, H-1, W]
-    rgb_grad_w = torch.exp(
-        -(gt_image[:, :, 1:] - gt_image[:, :, :-1]).abs().mean(dim=0, keepdim=True)
-    )  # [1, H, W-1]
-    tv_h = torch.pow(prediction[:, 1:, :] - prediction[:, :-1, :], 2)  # [C, H-1, W]
-    tv_w = torch.pow(prediction[:, :, 1:] - prediction[:, :, :-1], 2)  # [C, H, W-1]
+# def weighted_tv_loss(
+#     weight_map: torch.Tensor,  # [1, H, W]
+#     gt_image: torch.Tensor,    # [3, H, W]
+#     prediction: torch.Tensor,  # [C, H, W]
+# ) -> torch.Tensor:
+#     rgb_grad_h = torch.exp(
+#         -(gt_image[:, 1:, :] - gt_image[:, :-1, :]).abs().mean(dim=0, keepdim=True)
+#     )  # [1, H-1, W]
+#     rgb_grad_w = torch.exp(
+#         -(gt_image[:, :, 1:] - gt_image[:, :, :-1]).abs().mean(dim=0, keepdim=True)
+#     )  # [1, H, W-1]
+#     tv_h = torch.pow(prediction[:, 1:, :] - prediction[:, :-1, :], 2)  # [C, H-1, W]
+#     tv_w = torch.pow(prediction[:, :, 1:] - prediction[:, :, :-1], 2)  # [C, H, W-1]
 
-    weight_h = (weight_map[:, 1:, :] + weight_map[:, :-1, :]) / 2  # average weights
-    weight_w = (weight_map[:, :, 1:] + weight_map[:, :, :-1]) / 2
+#     weight_h = (weight_map[:, 1:, :] + weight_map[:, :-1, :]) / 2  # average weights
+#     weight_w = (weight_map[:, :, 1:] + weight_map[:, :, :-1]) / 2
 
-    tv_loss = (tv_h * rgb_grad_h * weight_h).mean() + (tv_w * rgb_grad_w * weight_w).mean()
-    return tv_loss
+#     tv_loss = (tv_h * rgb_grad_h * weight_h).mean() + (tv_w * rgb_grad_w * weight_w).mean()
+#     return tv_loss
 
-def depth_tv_loss(depth_map, weight_map):
-    # inputs: (H, W)
-    dx = torch.abs(depth_map[:, 1:] - depth_map[:, :-1])
-    dy = torch.abs(depth_map[1:, :] - depth_map[:-1, :])
-    wx = weight_map[:, 1:] * weight_map[:, :-1]
-    wy = weight_map[1:, :] * weight_map[:-1, :]
-    return (wx * dx).mean() + (wy * dy).mean()
+def weighted_tv_loss(tensor: torch.Tensor, weight_map: torch.Tensor):
+    """
+    Computes total variation loss (absolute difference) with multiplicative spatial weights.
+    Works for [C, H, W] tensors and [1, H, W] weight maps.
+    """
+
+    # Compute spatial differences
+    dx = torch.abs(tensor[:, :, 1:] - tensor[:, :, :-1]).sum(dim=0, keepdim=True)  # [1, H, W-1]
+    dy = torch.abs(tensor[:, 1:, :] - tensor[:, :-1, :]).sum(dim=0, keepdim=True)  # [1, H-1, W]
+
+    # Compute multiplicative weights
+    wx = weight_map[:, :, 1:] * weight_map[:, :, :-1]  # [1, H, W-1]
+    wy = weight_map[:, 1:, :] * weight_map[:, :-1, :]  # [1, H-1, W]
+
+    # Apply and average
+    loss_x = (dx * wx).mean()
+    loss_y = (dy * wy).mean()
+
+    return loss_x + loss_y
 
