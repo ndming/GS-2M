@@ -130,7 +130,7 @@ def render(
     if pad_normal:
         alpha_map = torch.where(alpha_map < 0.004, torch.zeros_like(alpha_map), alpha_map)
         alpha_map = torch.where(alpha_map > 1.0 - 0.004, torch.ones_like(alpha_map), alpha_map)
-        normal_bg = torch.tensor([0.0, 0.0, 1.0], device=normal_map.device)
+        normal_bg = torch.tensor([0.0, 0.0, 0.0], device=normal_map.device)
         normal_map = normal_map * alpha_map + (1.0 - alpha_map) * normal_bg[:, None, None]
 
     out = {

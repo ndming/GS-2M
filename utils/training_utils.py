@@ -65,6 +65,13 @@ def report_training(
 
         _, background = render_args
         white_bg = torch.all(background == 1).item()
+
+        envmap = dr.texture(
+            scene.cubemap.base[None, ...], scene.envmap_dirs[None, ...].contiguous(),
+            filter_mode="linear", boundary_mode="cube")[0].permute(2, 0, 1) # (3, H, W)
+        if tb_writer:
+            tb_writer.add_images("scene/envmap", envmap[None], global_step=iteration)
+
         for config in validation_configs:
             if config['cameras'] and len(config['cameras']) > 0:
                 l1_test_rgb = 0.0
@@ -118,10 +125,6 @@ def report_training(
                     diffuse_map = torch.where(normal_mask, diffuse_map, background[:, None, None])
                     specular_map = torch.where(normal_mask, specular_map, background[:, None, None])
 
-                    envmap = dr.texture(
-                        scene.cubemap.base[None, ...], scene.envmap_dirs[None, ...].contiguous(),
-                        filter_mode="linear", boundary_mode="cube")[0].permute(2, 0, 1) # (3, H, W)
-
                     if tb_writer and (idx < 5):
                         tb_writer.add_images(config['name'] + f"_{stem}/rgb_render", image[None], global_step=iteration)
                         if iteration == testing_iterations[0]:
@@ -138,7 +141,6 @@ def report_training(
                         tb_writer.add_images(config['name'] + f"_{stem}/z_pbr_render", pbr_render[None], global_step=iteration)
                         tb_writer.add_images(config['name'] + f"_{stem}/z_shade_diffuse", diffuse_map[None], global_step=iteration)
                         tb_writer.add_images(config['name'] + f"_{stem}/z_shade_specular", specular_map[None], global_step=iteration)
-                        tb_writer.add_images(config['name'] + f"_{stem}/z_uv_envmap", envmap[None], global_step=iteration)
 
                     l1_test_rgb += l1_loss(image, gt_image).mean().double()
                     l1_test_pbr += l1_loss(pbr_render, gt_image).mean().double()

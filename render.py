@@ -72,7 +72,7 @@ def render_views(model, split, iteration, views, scene, pipeline, background, ar
         torchvision.utils.save_image(gt_image, gt_dir / f"{image_stem}.png")
 
         # Normals
-        normal = convert_normal_for_save(render_pkg["normal_map"], view).cpu() # (3, H, W)
+        normal = convert_normal_for_save(render_pkg["normal_map"], view, args.normal_world).cpu() # (3, H, W)
         torchvision.utils.save_image(normal, normal_dir / f"{image_stem}.png")
 
         # Depth
@@ -179,6 +179,8 @@ if __name__ == "__main__":
     parser.add_argument("--rgb_color", action="store_true", help="Use RGB renderings for mesh colors, default to PBR")
     parser.add_argument("--dtu", action="store_true", help="Tailor the rendering for the DTU dataset")
     parser.add_argument("--tnt", action="store_true", help="Tailor the rendering for the TnT dataset")
+    parser.add_argument("--blender", action="store_true", help="Tailor the rendering for Blender scenes")
+    parser.add_argument("--normal_world", action="store_true", help="Save normals in world space, defaults to camera space")
 
     args = get_combined_args(parser)
     print(f"[>] Rendering {args.model_path}")
@@ -190,8 +192,8 @@ if __name__ == "__main__":
     pipeline = pipeline.extract(args)
     bounds = None
 
-    if args.dtu and args.tnt:
-        raise ValueError("[!] Cannot set both --dtu and --tnt flags at the same time. Choose one.")
+    if args.dtu and args.tnt and args.blender:
+        raise ValueError("[!] Please choose only one of: --dtu, --tnt, or --blender")
 
     if args.dtu:
         args.max_depth = 5.0
@@ -234,6 +236,13 @@ if __name__ == "__main__":
 
         args.voxel_size = voxel_size
         args.sdf_trunc = 4.0 * voxel_size
+
+    if args.blender:
+        args.extract_mesh = False
+        args.skip_train = True
+        args.skip_test = False
+        args.normal_world = True
+        model.white_background = True
 
     with torch.no_grad():
         gaussians = GaussianModel(model.sh_degree)

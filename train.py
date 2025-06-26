@@ -126,7 +126,7 @@ def train(model, opt, pipe, test_iterations, save_iterations, checkpoint_iterati
                 # Ldn = (weight_map * (render_pkg["sobel_normal_map"] - render_pkg["normal_map"]).abs().sum(dim=0)).mean()
                 Ltv_n = weighted_tv_loss(render_pkg["normal_map"], smooth_map)
                 Ltv_d = weighted_tv_loss(render_pkg["depth_map"], smooth_map)
-                Ltv = Ltv_n + Ltv_d
+                Ltv = Ltv_d + Ltv_n
 
             else:
                 Ltv = tv_loss(gt_image, render_pkg["normal_map"])
@@ -184,15 +184,15 @@ def train(model, opt, pipe, test_iterations, save_iterations, checkpoint_iterati
             Lsm = masked_tv_loss(normal_mask, gt_image, arm) if (normal_mask == 0).sum() > 0 else tv_loss(gt_image, arm)
 
             # Environment light loss
-            envmap = dr.texture(
-                scene.cubemap.base[None, ...], scene.envmap_dirs[None, ...].contiguous(),
-                filter_mode="linear", boundary_mode="cube")[0] # (H, W, 3)
-            tv_h1 = torch.pow(envmap[1:, :, :] - envmap[:-1, :, :], 2).mean()
-            tv_w1 = torch.pow(envmap[:, 1:, :] - envmap[:, :-1, :], 2).mean()
-            lambda_tv_envmap = opt.lambda_tv_envmap
-            Lenv = tv_h1 + tv_w1
+            # envmap = dr.texture(
+            #     scene.cubemap.base[None, ...], scene.envmap_dirs[None, ...].contiguous(),
+            #     filter_mode="linear", boundary_mode="cube")[0] # (H, W, 3)
+            # tv_h1 = torch.pow(envmap[1:, :, :] - envmap[:-1, :, :], 2).mean()
+            # tv_w1 = torch.pow(envmap[:, 1:, :] - envmap[:, :-1, :], 2).mean()
+            # lambda_tv_envmap = opt.lambda_tv_envmap
+            # Lenv = tv_h1 + tv_w1
 
-            Lmat = Lpbr + lambda_tv_smooth * Lsm + lambda_tv_envmap * Lenv
+            Lmat = Lpbr + lambda_tv_smooth * Lsm # + lambda_tv_envmap * Lenv
             loss += Lmat
 
         loss.backward()
