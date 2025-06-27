@@ -180,6 +180,15 @@ def multi_view_loss(scene, viewpoint_cam, opt, render_pkg, pipe, bg_color, mater
     angle_loss = (weights * angle_noise)[angle_valid].mean() if angle_valid.sum() > 0 else 0.0
     geo_loss = pixel_loss + angle_loss
 
+    if material_stage:
+        roughness_map = render_pkg["roughness_map"] # (1, H, W)
+        rough_flatten = roughness_map.reshape(-1)
+        if angle_valid.sum() > 0:
+            geo_loss -= 0.02 * rough_flatten[angle_valid].mean()
+        angle_mask = valid & (angle_error_rad >= angle_threshold)
+        if angle_mask.sum() > 0:
+            geo_loss += 0.02 * rough_flatten[angle_mask].mean()
+
     ncc_scale = scene.ncc_scale
     with torch.no_grad():
         mask = pixel_valid.reshape(-1)
@@ -567,4 +576,25 @@ def weighted_tv_loss(tensor: torch.Tensor, weight_map: torch.Tensor):
     loss_y = (dy * wy).mean()
 
     return loss_x + loss_y
+
+
+def laplacian_loss(tensor: torch.Tensor, weight_map: torch.Tensor = None) -> torch.Tensor:
+    """
+    Laplacian-based smoothness loss.
+    tensor: (C, H, W)
+    weight_map: optional (1, H, W), e.g., (1 - roughness)
+    """
+
+    lap = (
+        -4 * tensor
+        + torch.roll(tensor, shifts=1, dims=1)
+        + torch.roll(tensor, shifts=-1, dims=1)
+        + torch.roll(tensor, shifts=1, dims=2)
+        + torch.roll(tensor, shifts=-1, dims=2)
+    )
+
+    if weight_map is not None:
+        return (lap.abs() * weight_map).mean()
+    else:
+        return lap.abs().mean()
 

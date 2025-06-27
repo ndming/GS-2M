@@ -28,7 +28,7 @@ import nvdiffrast.torch as dr
 import torch.nn.functional as F
 
 from utils.general_utils import safe_state
-from utils.loss_utils import l1_loss, planar_loss, sparse_loss, tv_loss, masked_tv_loss, weighted_tv_loss, multi_view_loss
+from utils.loss_utils import l1_loss, planar_loss, sparse_loss, tv_loss, masked_tv_loss, multi_view_loss, laplacian_loss
 from utils.training_utils import prepare_outdir, prepare_logger, report_training
 
 def train(model, opt, pipe, test_iterations, save_iterations, checkpoint_iterations, checkpoint):
@@ -124,9 +124,9 @@ def train(model, opt, pipe, test_iterations, save_iterations, checkpoint_iterati
                 smooth_map = (1.0 - roughness_map).clamp(0, 1).detach()
 
                 # Ldn = (weight_map * (render_pkg["sobel_normal_map"] - render_pkg["normal_map"]).abs().sum(dim=0)).mean()
-                Ltv_n = weighted_tv_loss(render_pkg["normal_map"], smooth_map)
-                Ltv_d = weighted_tv_loss(render_pkg["depth_map"], smooth_map)
-                Ltv = Ltv_d + Ltv_n
+                Ltv = laplacian_loss(render_pkg["normal_map"], smooth_map)
+                # Ltv_d = laplacian_loss(render_pkg["depth_map"], smooth_map)
+                # Ltv = Ltv_d + Ltv_n
 
             else:
                 Ltv = tv_loss(gt_image, render_pkg["normal_map"])
