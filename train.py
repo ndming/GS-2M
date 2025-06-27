@@ -28,7 +28,7 @@ import nvdiffrast.torch as dr
 import torch.nn.functional as F
 
 from utils.general_utils import safe_state
-from utils.loss_utils import l1_loss, planar_loss, sparse_loss, tv_loss, masked_tv_loss, multi_view_loss, laplacian_loss
+from utils.loss_utils import l1_loss, planar_loss, sparse_loss, tv_loss, masked_tv_loss, multi_view_loss, weighted_tv_loss, depth_normal_loss
 from utils.training_utils import prepare_outdir, prepare_logger, report_training
 
 def train(model, opt, pipe, test_iterations, save_iterations, checkpoint_iterations, checkpoint):
@@ -92,23 +92,20 @@ def train(model, opt, pipe, test_iterations, save_iterations, checkpoint_iterati
         Lc = l1_loss(image, gt_image)
         lambda_ssim = opt.lambda_ssim
         Lssim = 1.0 - fused_ssim(image.unsqueeze(0), gt_image.unsqueeze(0))
-        Lrgb = (1.0 - lambda_ssim) * Lc + lambda_ssim * Lssim
+        Lrgb = lambda_ssim * Lssim
+        if not material_stage or Lssim >= 0.5:
+            Lrgb += (1.0 - lambda_ssim) * Lc
 
         # Planar and sparse losses
         Lplanar = planar_loss(visibility_filter, gaussians)
         Lsparse = sparse_loss(render_pkg["alpha_map"]) if opt.use_sparse_loss else 0.0
 
         # Total loss
-        loss = opt.lambda_planar * Lplanar + opt.lambda_sparse * Lsparse
-        if not material_stage:
-            loss += Lrgb
+        loss = Lrgb + opt.lambda_planar * Lplanar + opt.lambda_sparse * Lsparse
 
         # Geometry losses
         Lgeo = torch.tensor([0.0])
         if geometry_stage:
-            lambda_dn = opt.lambda_depth_normal
-            Ldn = (render_pkg["sobel_normal_map"] - render_pkg["normal_map"]).abs().sum(dim=0).mean()
-
             # n_map = render_pkg["normal_map"] # (3, H, W)
             # n_map = torch.where(torch.norm(n_map, dim=0, keepdim=True) > 0, F.normalize(n_map, dim=0, p=2), n_map)
             # Ltv = tv_loss(gt_image, render_pkg["normal_map"])
@@ -117,19 +114,22 @@ def train(model, opt, pipe, test_iterations, save_iterations, checkpoint_iterati
             mv_args = (scene, viewpoint_cam, opt, render_pkg, pipe, background, material_stage)
             Lmv = 0.0 if lambda_mv == 0.0 else multi_view_loss(*mv_args)
 
-            lambda_tv = opt.lambda_tv_normal
+            lambda_dn = opt.lambda_depth_normal
+            # Ldn = (render_pkg["sobel_normal_map"] - render_pkg["normal_map"]).abs().sum(dim=0).mean()
+            Ldn = depth_normal_loss(render_pkg["normal_map"], render_pkg["sobel_normal_map"], gt_image)
+
+            weight_map = None
             if material_stage:
                 roughness_map = render_pkg["roughness_map"] # (1, H, W)
-                # weight_map = roughness_map.clamp(0, 1).detach()
-                smooth_map = (1.0 - roughness_map).clamp(0, 1).detach()
+                weight_map = (1.0 - roughness_map).clamp(0, 1).detach()
 
                 # Ldn = (weight_map * (render_pkg["sobel_normal_map"] - render_pkg["normal_map"]).abs().sum(dim=0)).mean()
-                Ltv = laplacian_loss(render_pkg["normal_map"], smooth_map)
+                # Ltv = laplacian_loss(render_pkg["normal_map"], smooth_map)
                 # Ltv_d = laplacian_loss(render_pkg["depth_map"], smooth_map)
                 # Ltv = Ltv_d + Ltv_n
 
-            else:
-                Ltv = tv_loss(gt_image, render_pkg["normal_map"])
+            lambda_tv = opt.lambda_tv_normal
+            Ltv = weighted_tv_loss(gt_image, render_pkg["normal_map"], weight_map)
 
             Lgeo = lambda_dn * Ldn + lambda_mv * Lmv + lambda_tv * Ltv
             loss += Lgeo
@@ -192,7 +192,7 @@ def train(model, opt, pipe, test_iterations, save_iterations, checkpoint_iterati
             # lambda_tv_envmap = opt.lambda_tv_envmap
             # Lenv = tv_h1 + tv_w1
 
-            Lmat = Lpbr + lambda_tv_smooth * Lsm # + lambda_tv_envmap * Lenv
+            Lmat = (1.0 - lambda_ssim) * Lpbr + lambda_tv_smooth * Lsm # + lambda_tv_envmap * Lenv
             loss += Lmat
 
         loss.backward()

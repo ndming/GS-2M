@@ -13,12 +13,12 @@ if runtime_file.exists():
     with open(runtime_file, 'r') as f:
       runtime_data = json.load(f)
 
-label = f'wo-brdf_dn-0.03_tv-0.01'
+label = f'ours_wo-brdf_tv-0.1'
 runtimes = []
 for scene in scenes:
     scene_start = time.time()
 
-    common_args = f"-r 2 --material_from_iter 30000 --lambda_depth_normal 0.03 --lambda_tv_normal 0.01"
+    common_args = f"-r 2 --material_from_iter 30000 --lambda_tv_normal 0.1"
     cmd = f'python train.py -s {data_base_path}/scan{scene} -m {out_base_path}/scan{scene} {common_args}'
     print("[>] " + cmd)
     os.system(cmd)
@@ -48,12 +48,187 @@ average_minutes = sum(runtimes) / len(runtimes) / 60
 runtime_data[label] = round(average_minutes, 2)
 
 
-label = f'w-brdf_dn-0.03_tv-0.01'
+label = f'ours_wo-brdf_tv-0.2'
 runtimes = []
 for scene in scenes:
     scene_start = time.time()
 
-    common_args = f"-r 2 --material_from_iter 5000 --lambda_depth_normal 0.03 --lambda_tv_normal 0.01"
+    common_args = f"-r 2 --material_from_iter 30000 --lambda_tv_normal 0.2"
+    cmd = f'python train.py -s {data_base_path}/scan{scene} -m {out_base_path}/scan{scene} {common_args}'
+    print("[>] " + cmd)
+    os.system(cmd)
+
+    common_args = f"--dtu --label {label}"
+    cmd = f'python render.py -m {out_base_path}/scan{scene} {common_args}'
+    print("[>] " + cmd)
+    os.system(cmd)
+
+    scene_time = time.time() - scene_start
+    runtimes.append(scene_time)
+
+    common_args = f"--split train --method {label}_30000 --rgb_eval"
+    cmd = f"python metrics.py -m {out_base_path}/scan{scene} {common_args}"
+    print("[>] " + cmd)
+    os.system(cmd)
+
+    cmd = f"python scripts/eval_dtu/evaluate_single_scene.py " + \
+          f"--input_ply {out_base_path}/scan{scene}/train/{label}_30000/meshes/tsdf_post.ply " + \
+          f"--ref_dir {data_base_path}/scan{scene} " + \
+          f"--dtu_dir {data_base_path}/Official_DTU_Dataset"
+    print("[>] " + cmd)
+    os.system(cmd)
+    print(f"==> Done with scene: scan{scene} <===\n")
+
+average_minutes = sum(runtimes) / len(runtimes) / 60
+runtime_data[label] = round(average_minutes, 2)
+
+
+label = f'ours_wo-brdf_tv-0.5'
+runtimes = []
+for scene in scenes:
+    scene_start = time.time()
+
+    common_args = f"-r 2 --material_from_iter 30000 --lambda_tv_normal 0.5"
+    cmd = f'python train.py -s {data_base_path}/scan{scene} -m {out_base_path}/scan{scene} {common_args}'
+    print("[>] " + cmd)
+    os.system(cmd)
+
+    common_args = f"--dtu --label {label}"
+    cmd = f'python render.py -m {out_base_path}/scan{scene} {common_args}'
+    print("[>] " + cmd)
+    os.system(cmd)
+
+    scene_time = time.time() - scene_start
+    runtimes.append(scene_time)
+
+    common_args = f"--split train --method {label}_30000 --rgb_eval"
+    cmd = f"python metrics.py -m {out_base_path}/scan{scene} {common_args}"
+    print("[>] " + cmd)
+    os.system(cmd)
+
+    cmd = f"python scripts/eval_dtu/evaluate_single_scene.py " + \
+          f"--input_ply {out_base_path}/scan{scene}/train/{label}_30000/meshes/tsdf_post.ply " + \
+          f"--ref_dir {data_base_path}/scan{scene} " + \
+          f"--dtu_dir {data_base_path}/Official_DTU_Dataset"
+    print("[>] " + cmd)
+    os.system(cmd)
+    print(f"==> Done with scene: scan{scene} <===\n")
+
+average_minutes = sum(runtimes) / len(runtimes) / 60
+runtime_data[label] = round(average_minutes, 2)
+
+
+label = f'ours_w-brdf_tv-0.5'
+runtimes = []
+for scene in scenes:
+    scene_start = time.time()
+
+    common_args = f"-r 2 --lambda_tv_normal 0.5"
+    cmd = f'python train.py -s {data_base_path}/scan{scene} -m {out_base_path}/scan{scene} {common_args}'
+    print("[>] " + cmd)
+    os.system(cmd)
+
+    common_args = f"--dtu --label {label}"
+    cmd = f'python render.py -m {out_base_path}/scan{scene} {common_args}'
+    print("[>] " + cmd)
+    os.system(cmd)
+
+    scene_time = time.time() - scene_start
+    runtimes.append(scene_time)
+
+    common_args = f"--split train --method {label}_30000"
+    cmd = f"python metrics.py -m {out_base_path}/scan{scene} {common_args}"
+    print("[>] " + cmd)
+    os.system(cmd)
+
+    cmd = f"python scripts/eval_dtu/evaluate_single_scene.py " + \
+          f"--input_ply {out_base_path}/scan{scene}/train/{label}_30000/meshes/tsdf_post.ply " + \
+          f"--ref_dir {data_base_path}/scan{scene} " + \
+          f"--dtu_dir {data_base_path}/Official_DTU_Dataset"
+    print("[>] " + cmd)
+    os.system(cmd)
+    print(f"==> Done with scene: scan{scene} <===\n")
+
+average_minutes = sum(runtimes) / len(runtimes) / 60
+runtime_data[label] = round(average_minutes, 2)
+
+
+label = f'ours_w-brdf_tv-0.2'
+runtimes = []
+for scene in scenes:
+    scene_start = time.time()
+
+    common_args = f"-r 2 --lambda_tv_normal 0.2"
+    cmd = f'python train.py -s {data_base_path}/scan{scene} -m {out_base_path}/scan{scene} {common_args}'
+    print("[>] " + cmd)
+    os.system(cmd)
+
+    common_args = f"--dtu --label {label}"
+    cmd = f'python render.py -m {out_base_path}/scan{scene} {common_args}'
+    print("[>] " + cmd)
+    os.system(cmd)
+
+    scene_time = time.time() - scene_start
+    runtimes.append(scene_time)
+
+    common_args = f"--split train --method {label}_30000"
+    cmd = f"python metrics.py -m {out_base_path}/scan{scene} {common_args}"
+    print("[>] " + cmd)
+    os.system(cmd)
+
+    cmd = f"python scripts/eval_dtu/evaluate_single_scene.py " + \
+          f"--input_ply {out_base_path}/scan{scene}/train/{label}_30000/meshes/tsdf_post.ply " + \
+          f"--ref_dir {data_base_path}/scan{scene} " + \
+          f"--dtu_dir {data_base_path}/Official_DTU_Dataset"
+    print("[>] " + cmd)
+    os.system(cmd)
+    print(f"==> Done with scene: scan{scene} <===\n")
+
+average_minutes = sum(runtimes) / len(runtimes) / 60
+runtime_data[label] = round(average_minutes, 2)
+
+
+label = f'ours_w-brdf_tv-0.1'
+runtimes = []
+for scene in scenes:
+    scene_start = time.time()
+
+    common_args = f"-r 2 --lambda_tv_normal 0.1"
+    cmd = f'python train.py -s {data_base_path}/scan{scene} -m {out_base_path}/scan{scene} {common_args}'
+    print("[>] " + cmd)
+    os.system(cmd)
+
+    common_args = f"--dtu --label {label}"
+    cmd = f'python render.py -m {out_base_path}/scan{scene} {common_args}'
+    print("[>] " + cmd)
+    os.system(cmd)
+
+    scene_time = time.time() - scene_start
+    runtimes.append(scene_time)
+
+    common_args = f"--split train --method {label}_30000"
+    cmd = f"python metrics.py -m {out_base_path}/scan{scene} {common_args}"
+    print("[>] " + cmd)
+    os.system(cmd)
+
+    cmd = f"python scripts/eval_dtu/evaluate_single_scene.py " + \
+          f"--input_ply {out_base_path}/scan{scene}/train/{label}_30000/meshes/tsdf_post.ply " + \
+          f"--ref_dir {data_base_path}/scan{scene} " + \
+          f"--dtu_dir {data_base_path}/Official_DTU_Dataset"
+    print("[>] " + cmd)
+    os.system(cmd)
+    print(f"==> Done with scene: scan{scene} <===\n")
+
+average_minutes = sum(runtimes) / len(runtimes) / 60
+runtime_data[label] = round(average_minutes, 2)
+
+
+label = f'ours_w-brdf_tv-0.2_metallic'
+runtimes = []
+for scene in scenes:
+    scene_start = time.time()
+
+    common_args = f"-r 2 --lambda_tv_normal 0.2 --metallic"
     cmd = f'python train.py -s {data_base_path}/scan{scene} -m {out_base_path}/scan{scene} {common_args}'
     print("[>] " + cmd)
     os.system(cmd)

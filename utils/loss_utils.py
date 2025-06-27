@@ -183,8 +183,8 @@ def multi_view_loss(scene, viewpoint_cam, opt, render_pkg, pipe, bg_color, mater
     if material_stage:
         roughness_map = render_pkg["roughness_map"] # (1, H, W)
         rough_flatten = roughness_map.reshape(-1)
-        if angle_valid.sum() > 0:
-            geo_loss -= 0.02 * rough_flatten[angle_valid].mean()
+        # if angle_valid.sum() > 0:
+        #     geo_loss -= 0.02 * rough_flatten[angle_valid].mean()
         angle_mask = valid & (angle_error_rad >= angle_threshold)
         if angle_mask.sum() > 0:
             geo_loss += 0.02 * rough_flatten[angle_mask].mean()
@@ -488,14 +488,12 @@ def tv_loss(gt_image: torch.Tensor, prediction: torch.Tensor, pad=1, step=1):
     if pad > 1:
         gt_image = F.avg_pool2d(gt_image, pad, pad)
         prediction = F.avg_pool2d(prediction, pad, pad)
-    rgb_grad_h = torch.exp(
-        -(gt_image[:, 1:, :] - gt_image[:, :-1, :]).abs().mean(dim=0, keepdim=True)
-    )  # [1, H-1, W]
-    rgb_grad_w = torch.exp(
-        -(gt_image[:, :, 1:] - gt_image[:, :, :-1]).abs().mean(dim=0, keepdim=True)
-    )  # [1, H-1, W]
-    tv_h = torch.pow(prediction[:, 1:, :] - prediction[:, :-1, :], 2)  # [C, H-1, W]
-    tv_w = torch.pow(prediction[:, :, 1:] - prediction[:, :, :-1], 2)  # [C, H, W-1]
+    rgb_grad_h = torch.exp(-(gt_image[:, 1:, :] - gt_image[:, :-1, :]).abs().mean(dim=0, keepdim=True)) # (1, H-1, W)
+    rgb_grad_w = torch.exp(-(gt_image[:, :, 1:] - gt_image[:, :, :-1]).abs().mean(dim=0, keepdim=True)) # (1, H-1, W)
+    # tv_h = torch.pow(prediction[:, 1:, :] - prediction[:, :-1, :], 2) # (C, H-1, W)
+    # tv_w = torch.pow(prediction[:, :, 1:] - prediction[:, :, :-1], 2) # (C, H, W-1)
+    tv_h = (prediction[:, 1:, :] - prediction[:, :-1, :]).abs() # (C, H-1, W)
+    tv_w = (prediction[:, :, 1:] - prediction[:, :, :-1]).abs() # (C, H, W-1)
     tv_loss = (tv_h * rgb_grad_h).mean() + (tv_w * rgb_grad_w).mean()
 
     if step > 1:
@@ -506,8 +504,10 @@ def tv_loss(gt_image: torch.Tensor, prediction: torch.Tensor, pad=1, step=1):
             rgb_grad_w = torch.exp(
                 -(gt_image[:, :, s:] - gt_image[:, :, :-s]).abs().mean(dim=0, keepdim=True)
             )  # [1, H-1, W]
-            tv_h = torch.pow(prediction[:, s:, :] - prediction[:, :-s, :], 2)  # [C, H-1, W]
-            tv_w = torch.pow(prediction[:, :, s:] - prediction[:, :, :-s], 2)  # [C, H, W-1]
+            # tv_h = torch.pow(prediction[:, s:, :] - prediction[:, :-s, :], 2) # (C, H-1, W)
+            # tv_w = torch.pow(prediction[:, :, s:] - prediction[:, :, :-s], 2) # (C, H, W-1)
+            tv_h = (prediction[:, s:, :] - prediction[:, :-s, :]).abs() # (C, H-1, W)
+            tv_w = (prediction[:, :, s:] - prediction[:, :, :-s]).abs() # (C, H, W-1)
             tv_loss += (tv_h * rgb_grad_h).mean() + (tv_w * rgb_grad_w).mean()
 
     return tv_loss
@@ -522,42 +522,65 @@ def masked_tv_loss(
     rgb_grad_w = torch.exp(-(gt_image[:, :, 1:] - gt_image[:, :, :-1]).abs().mean(dim=0, keepdim=True)) # (1, H-1, W)
     # tv_h = torch.pow(prediction[:, 1:, :] - prediction[:, :-1, :], 2) # (C, H-1, W)
     # tv_w = torch.pow(prediction[:, :, 1:] - prediction[:, :, :-1], 2) # (C, H, W-1)
-    tv_w = torch.abs(prediction[:, :, 1:] - prediction[:, :, :-1]).sum(dim=0, keepdim=True) # (C, H, W-1)
-    tv_h = torch.abs(prediction[:, 1:, :] - prediction[:, :-1, :]).sum(dim=0, keepdim=True) # (C, H-1, W)
+    tv_h = (prediction[:, 1:, :] - prediction[:, :-1, :]).abs() # (C, H-1, W)
+    tv_w = (prediction[:, :, 1:] - prediction[:, :, :-1]).abs() # (C, H, W-1)
 
     # erode mask
     mask = mask.float()
     if erosion:
         kernel = mask.new_ones([7, 7])
         mask = kornia.morphology.erosion(mask[None, ...], kernel)[0]
-    mask_h = mask[:, 1:, :] * mask[:, :-1, :]  # [1, H-1, W]
-    mask_w = mask[:, :, 1:] * mask[:, :, :-1]  # [1, H, W-1]
+    mask_h = mask[:, 1:, :] * mask[:, :-1, :] # (1, H-1, W)
+    mask_w = mask[:, :, 1:] * mask[:, :, :-1] # (1, H, W-1)
 
     tv_loss = (tv_h * rgb_grad_h * mask_h).mean() + (tv_w * rgb_grad_w * mask_w).mean()
 
     return tv_loss
 
-# def weighted_tv_loss(
-#     weight_map: torch.Tensor,  # [1, H, W]
-#     gt_image: torch.Tensor,    # [3, H, W]
-#     prediction: torch.Tensor,  # [C, H, W]
-# ) -> torch.Tensor:
-#     rgb_grad_h = torch.exp(
-#         -(gt_image[:, 1:, :] - gt_image[:, :-1, :]).abs().mean(dim=0, keepdim=True)
-#     )  # [1, H-1, W]
-#     rgb_grad_w = torch.exp(
-#         -(gt_image[:, :, 1:] - gt_image[:, :, :-1]).abs().mean(dim=0, keepdim=True)
-#     )  # [1, H, W-1]
-#     tv_h = torch.pow(prediction[:, 1:, :] - prediction[:, :-1, :], 2)  # [C, H-1, W]
-#     tv_w = torch.pow(prediction[:, :, 1:] - prediction[:, :, :-1], 2)  # [C, H, W-1]
+def weighted_tv_loss(gt_image: torch.Tensor, pred: torch.Tensor, weight_map: torch.Tensor=None, pad=1, step=1):
+    # gt_image: (3, H, W), pred: (C, H, W), weight_map: (1, H, W) with values in [0, 1]
+    if pad > 1:
+        gt_image = F.avg_pool2d(gt_image, pad, pad)
+        pred = F.avg_pool2d(pred, pad, pad)
+        if weight_map is not None:
+            weight_map = F.avg_pool2d(weight_map, pad, pad)
 
-#     weight_h = (weight_map[:, 1:, :] + weight_map[:, :-1, :]) / 2  # average weights
-#     weight_w = (weight_map[:, :, 1:] + weight_map[:, :, :-1]) / 2
+    rgb_grad_h = torch.exp(-(gt_image[:, 1:, :] - gt_image[:, :-1, :]).abs().mean(dim=0, keepdim=True)) # (1, H-1, W)
+    rgb_grad_w = torch.exp(-(gt_image[:, :, 1:] - gt_image[:, :, :-1]).abs().mean(dim=0, keepdim=True)) # (1, H, W-1)
+    # tv_h = torch.pow(pred[:, 1:, :] - pred[:, :-1, :], 2) # (C, H-1, W)
+    # tv_w = torch.pow(pred[:, :, 1:] - pred[:, :, :-1], 2) # (C, H, W-1)
+    tv_h = (pred[:, 1:, :] - pred[:, :-1, :]).abs() # (C, H-1, W)
+    tv_w = (pred[:, :, 1:] - pred[:, :, :-1]).abs() # (C, H, W-1)
 
-#     tv_loss = (tv_h * rgb_grad_h * weight_h).mean() + (tv_w * rgb_grad_w * weight_w).mean()
-#     return tv_loss
+    if weight_map is not None:
+        # Average weights for adjacent pixels along height and width gradients
+        weight_h = (weight_map[:, 1:, :] + weight_map[:, :-1, :]) / 2 # (1, H-1, W)
+        weight_w = (weight_map[:, :, 1:] + weight_map[:, :, :-1]) / 2 # (1, H, W-1)
+        tv_loss = (tv_h * rgb_grad_h * weight_h).mean() + (tv_w * rgb_grad_w * weight_w).mean()
+    else:
+        tv_loss = (tv_h * rgb_grad_h).mean() + (tv_w * rgb_grad_w).mean()
 
-def weighted_tv_loss(tensor: torch.Tensor, weight_map: torch.Tensor):
+    if step > 1:
+        for s in range(2, step + 1):
+            rgb_grad_h = torch.exp(-(gt_image[:, s:, :] - gt_image[:, :-s, :]).abs().mean(dim=0, keepdim=True)) # (1, H-s, W)
+            rgb_grad_w = torch.exp(-(gt_image[:, :, s:] - gt_image[:, :, :-s]).abs().mean(dim=0, keepdim=True)) # (1, H, W-s)
+
+            # tv_h = torch.pow(pred[:, s:, :] - pred[:, :-s, :], 2) # (C, H-s, W)
+            # tv_w = torch.pow(pred[:, :, s:] - pred[:, :, :-s], 2) # (C, H, W-s)
+            tv_h = (pred[:, s:, :] - pred[:, :-s, :]).abs() # (C, H-s, W)
+            tv_w = (pred[:, :, s:] - pred[:, :, :-s]).abs() # (C, H, W-s)
+
+            if weight_map is not None:
+                weight_h = (weight_map[:, s:, :] + weight_map[:, :-s, :]) / 2
+                weight_w = (weight_map[:, :, s:] + weight_map[:, :, :-s]) / 2
+                tv_loss += (tv_h * rgb_grad_h * weight_h).mean() + (tv_w * rgb_grad_w * weight_w).mean()
+            else:
+                tv_loss += (tv_h * rgb_grad_h).mean() + (tv_w * rgb_grad_w).mean()
+
+    return tv_loss
+
+
+def weighted_tv_loss2(tensor: torch.Tensor, weight_map: torch.Tensor):
     """
     Computes total variation loss (absolute difference) with multiplicative spatial weights.
     Works for (C, H, W) tensors and (1, H, W) weight maps.

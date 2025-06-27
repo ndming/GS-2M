@@ -153,7 +153,7 @@ def report_training(
                 l1_test_pbr /= len(config['cameras'])
 
                 if not pbr_stats:
-                    tqdm.write(f"[ITER {iteration:>5}] Evaluating {config['name']:>5} (RGB): L1 - {l1_test_rgb:.4f} | PSNR - {psnr_test_rgb:.2f}")
+                    tqdm.write(f"[ITER {iteration:>5}] Evaluating {config['name']:>5} (rgb): L1 - {l1_test_rgb:.4f} | PSNR - {psnr_test_rgb:.2f}")
                 else:
                     tqdm.write(f"[ITER {iteration:>5}] Evaluating {config['name']:>5} (PBR): L1 - {l1_test_pbr:.4f} | PSNR - {psnr_test_pbr:.2f}")
 
