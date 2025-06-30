@@ -58,6 +58,33 @@ def linear_to_srgb(linear: Union[np.ndarray, torch.Tensor]) -> Union[np.ndarray,
     else:
         raise NotImplementedError
 
+def srgb_to_linear(srgb: Union[np.ndarray, torch.Tensor]) -> Union[np.ndarray, torch.Tensor]:
+    """
+    Convert sRGB values in [0, 1] to linear RGB using the standard sRGB inverse gamma curve.
+    
+    Parameters:
+        srgb: np.ndarray or torch.Tensor with values in [0, 1]
+    
+    Returns:
+        linear RGB values in [0, 1], same type as input.
+    """
+    if isinstance(srgb, torch.Tensor):
+        eps = torch.finfo(torch.float32).eps
+        srgb = torch.clamp(srgb, 0.0, 1.0)
+        linear0 = srgb / 12.92
+        linear1 = ((srgb + 0.055) / 1.055) ** 2.4
+        return torch.where(srgb <= 0.04045, linear0, linear1)
+    
+    elif isinstance(srgb, np.ndarray):
+        eps = np.finfo(np.float32).eps
+        srgb = np.clip(srgb, 0.0, 1.0)
+        linear0 = srgb / 12.92
+        linear1 = ((srgb + 0.055) / 1.055) ** 2.4
+        return np.where(srgb <= 0.04045, linear0, linear1)
+    
+    else:
+        raise NotImplementedError("Input must be a numpy array or torch tensor.")
+
 
 def _rgb_to_srgb(f: torch.Tensor) -> torch.Tensor:
     return torch.where(

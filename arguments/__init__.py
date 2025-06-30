@@ -55,7 +55,7 @@ class ModelParams(ParamGroup):
         self.data_device = "cuda"
         self.eval = False
         # GS-IR
-        self.gamma = False
+        self.gamma = True
         self.metallic = False
         # Ours
         self.mask_gt = False # whether to mask GT images during training
@@ -130,7 +130,7 @@ class OptimizationParams(ParamGroup):
         self.mv_occlusion_threshold = 5e-4
         self.mv_pixel_weight_decay = 3.0
         self.lambda_multi_view = 1.0
-        self.lambda_luminance = 0.1
+        self.lambda_luminance = 0.3
 
         super().__init__(parser, "Optimization Parameters")
 
