@@ -540,6 +540,8 @@ class GaussianModel:
         new_roughness = self._roughness[selected_pts_mask]
         new_metallic = self._metallic[selected_pts_mask]
 
+        # new_xyz += self.xyz_gradient_accum[selected_pts_mask] / self.denom[selected_pts_mask]
+
         self.densification_postfix(
             new_xyz, new_features_dc, new_features_rest, new_opacities, new_scaling, new_rotation,
             new_albedo, new_roughness, new_metallic)

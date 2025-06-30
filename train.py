@@ -114,24 +114,24 @@ def train(model, opt, pipe, test_iterations, save_iterations, checkpoint_iterati
             mv_args = (scene, viewpoint_cam, opt, render_pkg, pipe, background, material_stage)
             Lmv = 0.0 if lambda_mv == 0.0 else multi_view_loss(*mv_args)
 
-            lambda_dn = opt.lambda_depth_normal
-            # Ldn = (render_pkg["sobel_normal_map"] - render_pkg["normal_map"]).abs().sum(dim=0).mean()
-            Ldn = depth_normal_loss(render_pkg["normal_map"], render_pkg["sobel_normal_map"], gt_image)
-
             weight_map = None
+            gt_rgb = gt_image
             if material_stage:
                 roughness_map = render_pkg["roughness_map"] # (1, H, W)
-                weight_map = (1.0 - roughness_map).clamp(0, 1).detach()
-
+                weight_map = 1.0 + 4.0 * (1.0 - roughness_map).clamp(0, 1).detach()
+                gt_rgb = image.detach()
                 # Ldn = (weight_map * (render_pkg["sobel_normal_map"] - render_pkg["normal_map"]).abs().sum(dim=0)).mean()
                 # Ltv = laplacian_loss(render_pkg["normal_map"], smooth_map)
                 # Ltv_d = laplacian_loss(render_pkg["depth_map"], smooth_map)
                 # Ltv = Ltv_d + Ltv_n
+            lambda_dn = opt.lambda_depth_normal
+            # Ldn = (render_pkg["sobel_normal_map"] - render_pkg["normal_map"]).abs().sum(dim=0).mean()
+            Ldn = depth_normal_loss(render_pkg["normal_map"], render_pkg["sobel_normal_map"], gt_rgb, weight_map)
 
-            lambda_tv = opt.lambda_tv_normal
-            Ltv = weighted_tv_loss(gt_image, render_pkg["normal_map"], weight_map)
+            # lambda_tv = opt.lambda_tv_normal
+            # Ltv = weighted_tv_loss(gt_image, render_pkg["normal_map"], weight_map)
 
-            Lgeo = lambda_dn * Ldn + lambda_mv * Lmv + lambda_tv * Ltv
+            Lgeo = lambda_dn * Ldn + lambda_mv * Lmv # + lambda_tv * Ltv
             loss += Lgeo
 
         # Material losses
@@ -181,7 +181,7 @@ def train(model, opt, pipe, test_iterations, save_iterations, checkpoint_iterati
             # Smoothness loss
             arm = torch.cat([albedo_map, roughness_map, metallic_map], dim=0) # (5, H, W)
             lambda_tv_smooth = opt.lambda_tv_smooth
-            Lsm = masked_tv_loss(normal_mask, gt_image, arm) if (normal_mask == 0).sum() > 0 else tv_loss(gt_image, arm)
+            Lsm = masked_tv_loss(normal_mask, gt_rgb, arm) if (normal_mask == 0).sum() > 0 else tv_loss(gt_rgb, arm)
 
             # Environment light loss
             # envmap = dr.texture(

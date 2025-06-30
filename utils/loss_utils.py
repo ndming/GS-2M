@@ -110,11 +110,13 @@ def _erode_cv(img_in, erode_size=4):
 
     return img_out
 
-def depth_normal_loss(normal_map, sobel_normal_map, gt_image):
-    # normal_map, sobel_normal_map, gt_image: (3, H, W)
-    image_weight = (1.0 - _get_img_grad_weight(gt_image)).clamp(0, 1).detach() ** 2
+def depth_normal_loss(normal_map, sobel_normal_map, gt_image, weight_map=None):
+    # normal_map, sobel_normal_map, gt_image: (3, H, W), weight_map: (1, H, W)
+    weights = (1.0 - _get_img_grad_weight(gt_image)).clamp(0, 1).detach() ** 2
+    if weight_map is not None:
+        weights *= weight_map.squeeze()
     # image_weight = erode(image_weight[None, None], ksize=5).squeeze()
-    loss = (image_weight * (sobel_normal_map - normal_map).abs().sum(dim=0)).mean()
+    loss = (weights * (sobel_normal_map - normal_map).abs().sum(dim=0)).mean()
     return loss
 
 def _get_img_grad_weight(img):
@@ -128,7 +130,7 @@ def _get_img_grad_weight(img):
     grad_img = torch.cat((grad_img_x, grad_img_y), dim=0)
     grad_img, _ = torch.max(grad_img, dim=0)
     grad_img = (grad_img - grad_img.min()) / (grad_img.max() - grad_img.min())
-    grad_img = torch.nn.functional.pad(grad_img[None, None], (1, 1, 1, 1), mode='constant', value=1.0).squeeze()
+    grad_img = torch.nn.functional.pad(grad_img[None, None], (1, 1, 1, 1), mode='constant', value=0.0).squeeze()
     return grad_img
 
 def multi_view_loss(scene, viewpoint_cam, opt, render_pkg, pipe, bg_color, material_stage):
@@ -183,15 +185,16 @@ def multi_view_loss(scene, viewpoint_cam, opt, render_pkg, pipe, bg_color, mater
     if material_stage:
         roughness_map = render_pkg["roughness_map"] # (1, H, W)
         rough_flatten = roughness_map.reshape(-1)
+        # pixel_valid = pixel_valid & (rough_flatten > 0.1)
         # if angle_valid.sum() > 0:
         #     geo_loss -= 0.02 * rough_flatten[angle_valid].mean()
-        angle_mask = valid & (angle_error_rad >= angle_threshold)
-        if angle_mask.sum() > 0:
-            geo_loss += 0.02 * rough_flatten[angle_mask].mean()
+        # angle_mask = valid & (angle_error_rad >= angle_threshold)
+        # if angle_mask.sum() > 0:
+        #     geo_loss += 0.05 * rough_flatten[angle_mask].mean()
 
     ncc_scale = scene.ncc_scale
     with torch.no_grad():
-        mask = pixel_valid.reshape(-1)
+        mask = valid.reshape(-1)
         valid_indices = torch.arange(mask.shape[0], device=mask.device)[mask]
         if mask.sum() > opt.multi_view_sample_num:
             index = np.random.choice(mask.sum().cpu().numpy(), opt.multi_view_sample_num, replace=False)
@@ -248,7 +251,7 @@ def multi_view_loss(scene, viewpoint_cam, opt, render_pkg, pipe, bg_color, mater
         rough_vals = F.grid_sample(roughness_map.unsqueeze(1), grid_rough.view(1, -1, 1, 2), align_corners=True)
         rough_vals = rough_vals.squeeze() # (N,) valid_indices
         if (~ncc_mask).sum() > 0:
-            ncc_loss += 0.02 * rough_vals[~ncc_mask].mean()
+            ncc_loss += 0.05 * rough_vals[~ncc_mask].mean()
         if ncc_mask.sum() > 0:
             ncc_loss -= 0.02 * rough_vals[ncc_mask].mean()
 
