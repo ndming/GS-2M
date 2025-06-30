@@ -184,8 +184,6 @@ def pbr_shading(
     else:
         render_rgb = render_rgb.clamp(min=0.0, max=1.0)
 
-    ### NOTE: close `gamma` will cause better resuls in novel view synthesis but wrose relighting results.
-    ### NOTE: it is worth to figure out a better way to handle both novel view synthesis and relighting
     if gamma:
         render_rgb = linear_to_srgb(render_rgb.squeeze())
 

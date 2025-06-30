@@ -28,7 +28,7 @@ import nvdiffrast.torch as dr
 import torch.nn.functional as F
 
 from utils.general_utils import safe_state
-from utils.loss_utils import l1_loss, planar_loss, sparse_loss, tv_loss, masked_tv_loss, multi_view_loss, weighted_tv_loss, depth_normal_loss
+from utils.loss_utils import l1_loss, planar_loss, sparse_loss, tv_loss, masked_tv_loss, multi_view_loss, depth_normal_loss, luminance_loss
 from utils.training_utils import prepare_outdir, prepare_logger, report_training
 
 def train(model, opt, pipe, test_iterations, save_iterations, checkpoint_iterations, checkpoint):
@@ -115,18 +115,18 @@ def train(model, opt, pipe, test_iterations, save_iterations, checkpoint_iterati
             Lmv = 0.0 if lambda_mv == 0.0 else multi_view_loss(*mv_args)
 
             weight_map = None
-            gt_rgb = gt_image
+            diffuse_ref = gt_image
             if material_stage:
                 roughness_map = render_pkg["roughness_map"] # (1, H, W)
                 weight_map = 1.0 + 4.0 * (1.0 - roughness_map).clamp(0, 1).detach()
-                gt_rgb = image.detach()
+                diffuse_ref = image.detach()
                 # Ldn = (weight_map * (render_pkg["sobel_normal_map"] - render_pkg["normal_map"]).abs().sum(dim=0)).mean()
                 # Ltv = laplacian_loss(render_pkg["normal_map"], smooth_map)
                 # Ltv_d = laplacian_loss(render_pkg["depth_map"], smooth_map)
                 # Ltv = Ltv_d + Ltv_n
             lambda_dn = opt.lambda_depth_normal
             # Ldn = (render_pkg["sobel_normal_map"] - render_pkg["normal_map"]).abs().sum(dim=0).mean()
-            Ldn = depth_normal_loss(render_pkg["normal_map"], render_pkg["sobel_normal_map"], gt_rgb, weight_map)
+            Ldn = depth_normal_loss(render_pkg["normal_map"], render_pkg["sobel_normal_map"], diffuse_ref, weight_map)
 
             # lambda_tv = opt.lambda_tv_normal
             # Ltv = weighted_tv_loss(gt_image, render_pkg["normal_map"], weight_map)
@@ -137,11 +137,6 @@ def train(model, opt, pipe, test_iterations, save_iterations, checkpoint_iterati
         # Material losses
         Lmat = torch.tensor([0.0])
         if material_stage:
-            # Formulate roughness
-            roughness_map = render_pkg["roughness_map"]
-            rmax, rmin = 1.0, 0.04
-            roughness_map = roughness_map * (rmax - rmin) + rmin
-
             H, W = viewpoint_cam.image_height, viewpoint_cam.image_width
             c2w = viewpoint_cam.world_view_transform[:3, :3]
             view_dirs = -(canonical_rays @ c2w.T).reshape(H, W, 3) # (H, W, 3)
@@ -159,6 +154,13 @@ def train(model, opt, pipe, test_iterations, save_iterations, checkpoint_iterati
 
             albedo_map = render_pkg["albedo_map"] # (3, H, W)
             metallic_map = render_pkg["metallic_map"] # (1, H, W)
+            roughness_map = render_pkg["roughness_map"] # (1, H, W)
+            # rmax, rmin = 1.0, 0.001
+            # roughness_map = roughness_map * (rmax - rmin) + rmin
+
+            if not model.metallic:
+                metallic_map = (1.0 - render_pkg["roughness_map"]).clamp(0, 1).detach() # (1, H, W)
+                metallic_map = torch.where(normal_mask, metallic_map, background[:, None, None])
 
             pbr_pkg = pbr_shading(
                 light=scene.cubemap,
@@ -167,7 +169,7 @@ def train(model, opt, pipe, test_iterations, save_iterations, checkpoint_iterati
                 mask=normal_mask.permute(1, 2, 0), # (H, W, 1)
                 albedo=albedo_map.permute(1, 2, 0), # (H, W, 3)
                 roughness=roughness_map.permute(1, 2, 0), # (H, W, 1)
-                metallic=metallic_map.permute(1, 2, 0) if model.metallic else None, # (H, W, 1)
+                metallic=metallic_map.permute(1, 2, 0), # (H, W, 1)
                 occlusion=torch.ones_like(roughness_map).permute(1, 2, 0),
                 irradiance=torch.zeros_like(roughness_map).permute(1, 2, 0),
                 brdf_lut=scene.brdf_lut,
@@ -179,9 +181,10 @@ def train(model, opt, pipe, test_iterations, save_iterations, checkpoint_iterati
             Lpbr = l1_loss(render_pbr, gt_image)
 
             # Smoothness loss
-            arm = torch.cat([albedo_map, roughness_map, metallic_map], dim=0) # (5, H, W)
+            sm_maps = [albedo_map, roughness_map, metallic_map] if model.metallic else [albedo_map, roughness_map]
+            arm = torch.cat(sm_maps, dim=0)
             lambda_tv_smooth = opt.lambda_tv_smooth
-            Lsm = masked_tv_loss(normal_mask, gt_rgb, arm) if (normal_mask == 0).sum() > 0 else tv_loss(gt_rgb, arm)
+            Lsm = masked_tv_loss(normal_mask, diffuse_ref, arm) if (normal_mask == 0).sum() > 0 else tv_loss(diffuse_ref, arm)
 
             # Environment light loss
             # envmap = dr.texture(
@@ -192,7 +195,14 @@ def train(model, opt, pipe, test_iterations, save_iterations, checkpoint_iterati
             # lambda_tv_envmap = opt.lambda_tv_envmap
             # Lenv = tv_h1 + tv_w1
 
-            Lmat = (1.0 - lambda_ssim) * Lpbr + lambda_tv_smooth * Lsm # + lambda_tv_envmap * Lenv
+            # Luminance loss
+            diffuse_map = pbr_pkg["diffuse_rgb"].permute(2, 0, 1) # (3, H, W)
+            diffuse_map = torch.where(normal_mask, diffuse_map, background[:, None, None])
+            lambda_luminance = opt.lambda_luminance
+            # Llm = luminance_loss(diffuse_map, diffuse_ref, normal_mask)
+            Llm = (diffuse_map - diffuse_ref).abs().mean()
+
+            Lmat = (1.0 - lambda_ssim) * Lpbr + lambda_tv_smooth * Lsm # + lambda_luminance * Llm
             loss += Lmat
 
         loss.backward()

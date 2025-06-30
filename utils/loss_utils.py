@@ -182,15 +182,15 @@ def multi_view_loss(scene, viewpoint_cam, opt, render_pkg, pipe, bg_color, mater
     angle_loss = (weights * angle_noise)[angle_valid].mean() if angle_valid.sum() > 0 else 0.0
     geo_loss = pixel_loss + angle_loss
 
-    if material_stage:
-        roughness_map = render_pkg["roughness_map"] # (1, H, W)
-        rough_flatten = roughness_map.reshape(-1)
-        # pixel_valid = pixel_valid & (rough_flatten > 0.1)
-        # if angle_valid.sum() > 0:
-        #     geo_loss -= 0.02 * rough_flatten[angle_valid].mean()
-        # angle_mask = valid & (angle_error_rad >= angle_threshold)
-        # if angle_mask.sum() > 0:
-        #     geo_loss += 0.05 * rough_flatten[angle_mask].mean()
+    # if material_stage:
+    #     roughness_map = render_pkg["roughness_map"] # (1, H, W)
+    #     rough_flatten = roughness_map.reshape(-1)
+    #     pixel_valid = pixel_valid & (rough_flatten > 0.1)
+    #     if angle_valid.sum() > 0:
+    #         geo_loss -= 0.02 * rough_flatten[angle_valid].mean()
+    #     angle_mask = valid & (angle_error_rad >= angle_threshold)
+    #     if angle_mask.sum() > 0:
+    #         geo_loss += 0.05 * rough_flatten[angle_mask].mean()
 
     ncc_scale = scene.ncc_scale
     with torch.no_grad():
@@ -242,18 +242,20 @@ def multi_view_loss(scene, viewpoint_cam, opt, render_pkg, pipe, bg_color, mater
     ncc_loss = ncc.mean() if ncc_mask.sum() > 0 else 0.0
 
     if material_stage:
-        roughness_map = render_pkg["roughness_map"] # (1, H, W)
-        h_rough, w_rough = roughness_map.squeeze().shape
-        grid_rough = pixels.reshape(-1, 1, 2).float()
-        grid_rough = grid_rough.clone()
-        grid_rough[:, :, 0] = 2 * grid_rough[:, :, 0] / (w_rough - 1) - 1.0
-        grid_rough[:, :, 1] = 2 * grid_rough[:, :, 1] / (h_rough - 1) - 1.0
-        rough_vals = F.grid_sample(roughness_map.unsqueeze(1), grid_rough.view(1, -1, 1, 2), align_corners=True)
+        rough_map = render_pkg["roughness_map"] # (1, H, W)
+        h_map, w_map = rough_map.squeeze().shape
+        grid_map = pixels.reshape(-1, 1, 2).float()
+        grid_map = grid_map.clone()
+        grid_map[:, :, 0] = 2 * grid_map[:, :, 0] / (w_map - 1.0) - 1.0
+        grid_map[:, :, 1] = 2 * grid_map[:, :, 1] / (h_map - 1.0) - 1.0
+        rough_vals = F.grid_sample(rough_map.unsqueeze(1), grid_map.view(1, -1, 1, 2), align_corners=True)
         rough_vals = rough_vals.squeeze() # (N,) valid_indices
-        if (~ncc_mask).sum() > 0:
-            ncc_loss += 0.05 * rough_vals[~ncc_mask].mean()
-        if ncc_mask.sum() > 0:
-            ncc_loss -= 0.02 * rough_vals[ncc_mask].mean()
+        smooth_mask =  ncc_mask
+        varied_mask = ~ncc_mask
+        if varied_mask.sum() > 0:
+            ncc_loss += 0.06 * rough_vals[varied_mask].mean()
+        if smooth_mask.sum() > 0:
+            ncc_loss -= 0.01 * rough_vals[smooth_mask].mean()
 
         # rough_weights = (1.0 - rough_vals).clamp(0.0, 1.0).detach()
         # pixel_loss = 0.2 * (rough_weights * pixel_noise[valid_indices]).mean() if valid_indices.sum() > 0 else 0.0
@@ -416,7 +418,7 @@ def _loss_ncc(ref, nea):
     ncc = 1 - cc
     ncc = torch.clamp(ncc, 0.0, 2.0)
     ncc = torch.mean(ncc, dim=1, keepdim=True)
-    mask = (ncc < 0.9)
+    mask = (ncc < 0.8)
     return ncc, mask
 
 def _bilateral_weighted_ncc(ref, nea, sigma_g=0.1, sigma_x=1.0):
@@ -539,6 +541,33 @@ def masked_tv_loss(
     tv_loss = (tv_h * rgb_grad_h * mask_h).mean() + (tv_w * rgb_grad_w * mask_w).mean()
 
     return tv_loss
+
+def luminance_loss(img1, img2, mask=None, reduction='mean'):
+    """
+    Computes L1 loss between the luminance channels of two images.
+    Args:
+        img1: Tensor of shape (3, H, W)
+        img2: Tensor of shape (3, H, W)
+        mask: 1 for foreground, 0 for background (1, H, W)
+        reduction: 'mean', 'sum', or 'none'
+    Returns:
+        Scalar loss (if reduction is 'mean' or 'sum'), else tensor of per-pixel loss.
+    """
+    # sRGB luminance weights
+    weights = torch.tensor([0.2126, 0.7152, 0.0722], device=img1.device).view(3, 1, 1)
+    # Compute luminance channels
+    Y1 = (img1 * weights).sum(dim=0, keepdim=True) # (1, H, W)
+    Y2 = (img2 * weights).sum(dim=0, keepdim=True) # (1, H, W)
+    # L1 loss on luminance
+    loss = torch.abs(Y1 - Y2)
+    if mask is not None:
+        loss *= mask.float()
+    if reduction == 'mean':
+        return loss.mean()
+    elif reduction == 'sum':
+        return loss.sum()
+    else:
+        return loss # shape: [1, H, W]
 
 def weighted_tv_loss(gt_image: torch.Tensor, pred: torch.Tensor, weight_map: torch.Tensor=None, pad=1, step=1):
     # gt_image: (3, H, W), pred: (C, H, W), weight_map: (1, H, W) with values in [0, 1]

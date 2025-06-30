@@ -100,8 +100,13 @@ def report_training(
                     scene.cubemap.build_mips() # build mip for environment light
 
                     albedo_map = render_pkg["albedo_map"] # (3, H, W)
-                    metallic_map = render_pkg["metallic_map"] # (1, H, W)
                     roughness_map = render_pkg["roughness_map"] # (1, H, W)
+                    metallic_map = render_pkg["metallic_map"] # (1, H, W)
+                    # rmax, rmin = 1.0, 0.001
+                    # roughness_map = roughness_map * (rmax - rmin) + rmin
+                    if not metallic:
+                        metallic_map = (1.0 - render_pkg["roughness_map"]).clamp(0, 1) # (1, H, W)
+                        metallic_map = torch.where(normal_mask, metallic_map, background[:, None, None])
 
                     pbr_pkg = pbr_func(
                         light=scene.cubemap,
@@ -110,7 +115,7 @@ def report_training(
                         mask=normal_mask.permute(1, 2, 0), # (H, W, 1)
                         albedo=albedo_map.permute(1, 2, 0), # (H, W, 3)
                         roughness=roughness_map.permute(1, 2, 0), # (H, W, 1)
-                        metallic=metallic_map.permute(1, 2, 0) if metallic else None, # (H, W, 1)
+                        metallic=metallic_map.permute(1, 2, 0), # (H, W, 1)
                         occlusion=torch.ones_like(roughness_map).permute(1, 2, 0),
                         irradiance=torch.zeros_like(roughness_map).permute(1, 2, 0),
                         brdf_lut=scene.brdf_lut,
@@ -136,6 +141,8 @@ def report_training(
                                     render_pkg[key] = convert_normal_for_save(render_pkg[key], viewpoint)
                                 if 'depth' in key:
                                     render_pkg[key] = convert_depth_for_save(render_pkg[key])
+                                if 'metallic' in key and not metallic:
+                                    render_pkg[key] = torch.where(normal_mask, 1.0 - render_pkg["roughness_map"], background[:, None, None])
                                 tb_writer.add_images(config['name'] + f"_{stem}/{key}", render_pkg[key][None], global_step=iteration)
     
                         tb_writer.add_images(config['name'] + f"_{stem}/z_pbr_render", pbr_render[None], global_step=iteration)
