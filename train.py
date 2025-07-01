@@ -93,19 +93,21 @@ def train(model, opt, pipe, test_iterations, save_iterations, checkpoint_iterati
         gt_image = viewpoint_cam.gt_image.cuda()
 
         # RGB losses
-        Lc = l1_loss(image, gt_image)
+        L1 = l1_loss(image, gt_image)
         lambda_ssim = opt.lambda_ssim
         Lssim = 1.0 - fused_ssim(image.unsqueeze(0), gt_image.unsqueeze(0))
-        Lrgb = lambda_ssim * Lssim
-        if not material_stage or Lssim >= 0.5:
-            Lrgb += (1.0 - lambda_ssim) * Lc
+        Lrgb = (1.0 - lambda_ssim) * L1 + lambda_ssim * Lssim
+        # if not material_stage or Lssim >= 0.5:
+        #     Lrgb += (1.0 - lambda_ssim) * Lc
 
         # Planar and sparse losses
         Lplanar = planar_loss(visibility_filter, gaussians)
         Lsparse = sparse_loss(render_pkg["alpha_map"]) if opt.use_sparse_loss else 0.0
 
         # Total loss
-        loss = Lrgb + opt.lambda_planar * Lplanar + opt.lambda_sparse * Lsparse
+        loss = opt.lambda_planar * Lplanar + opt.lambda_sparse * Lsparse
+        if not material_stage:
+            loss += Lrgb
 
         # Geometry losses
         Lgeo = torch.tensor([0.0])
@@ -182,7 +184,8 @@ def train(model, opt, pipe, test_iterations, save_iterations, checkpoint_iterati
 
             render_pbr = pbr_pkg["render_rgb"].permute(2, 0, 1) # (3, H, W)
             render_pbr = torch.where(normal_mask, render_pbr, background[:, None, None])
-            Lpbr = l1_loss(render_pbr, gt_image)
+            Lssim = 1.0 - fused_ssim(render_pbr.unsqueeze(0), gt_image.unsqueeze(0))
+            Lpbr = (1.0 - lambda_ssim) * l1_loss(render_pbr, gt_image) + lambda_ssim * Lssim
 
             # Smoothness loss
             sm_maps = [albedo_map, roughness_map, metallic_map] if model.metallic else [albedo_map, roughness_map]
@@ -206,7 +209,7 @@ def train(model, opt, pipe, test_iterations, save_iterations, checkpoint_iterati
             # Llm = luminance_loss(diffuse_map, diffuse_ref, normal_mask)
             # Llm = (diffuse_map - diffuse_ref).abs().mean()
 
-            Lmat = (1.0 - lambda_ssim) * Lpbr + lambda_tv_smooth * Lsm # + lambda_luminance * Llm
+            Lmat = Lpbr + lambda_tv_smooth * Lsm # + lambda_luminance * Llm
             loss += Lmat
 
         loss.backward()
