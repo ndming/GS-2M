@@ -7,7 +7,15 @@ import mathutils
 from argparse import ArgumentParser
 from pathlib import Path
 
-BG_K = ()
+trans_configs = {
+    24: [-1.3, 0.1, 0.8],
+    37: [-1.6, 0.2, 0.6],
+    40: [-1.2, 0.1, 0.7],
+    55: [-1.2, 0.1, 0.8],
+    63: [-0.8, 0.2, 0.6],
+    65: [-1.0, 0.0, 0.6],
+    69: [-1.2, 0.0, 0.8],
+}
 
 def search_for_max_iter(folder):
     saved_iters = [int(fname.split("_")[-1]) for fname in os.listdir(folder)]
@@ -185,6 +193,7 @@ if __name__ == "__main__":
     parser.add_argument("--anim_ref_view", default=0, type=int)
     parser.add_argument("--anim_debug", action='store_true')
     parser.add_argument("--anim_trans", nargs=3, type=float, default=[-0.25, 0.0, 1.5])
+    parser.add_argument("--still", action='store_true')
     args = parser.parse_args()
 
     model_dir = Path(args.model).resolve()
@@ -202,6 +211,33 @@ if __name__ == "__main__":
     scene, camera, mesh, mat, bg_node, light = prepare_blender_scene(ply_file, views[0])
     bsdf = mat.node_tree.nodes.get('Principled BSDF')
     mat_nodes = mat.node_tree.nodes
+
+    if args.still:
+        scene.render.film_transparent = True
+        scene.render.image_settings.file_format = 'PNG'
+        scene.render.image_settings.color_mode = 'RGBA'
+        scene.render.image_settings.color_depth = '8'
+        scene.render.resolution_x = 600
+        scene.render.resolution_y = 600
+        scene.render.filepath = str(out_dir / "still.png")
+
+        bg_node.inputs[0].default_value = (1.0, 1.0, 1.0, 1.0)
+        bsdf.inputs['Base Color'].default_value = (0.7, 0.7, 0.7, 1)
+        light.energy = 75.0
+
+        ref_view = views[23]
+        scanID = int(model_dir.name[4:])
+        mesh.location += mathutils.Vector(trans_configs[scanID])
+
+        R = ref_view["rotation"]
+        T = ref_view["position"]
+        c2w = mathutils.Matrix(R).to_4x4()
+        c2w.translation = mathutils.Vector(T)
+        c2w = c2w @ mathutils.Matrix([[1, 0, 0, 0], [0, -1, 0, 0], [0, 0, -1, 0], [0, 0, 0, 1]])
+        camera.matrix_world = c2w
+
+        bpy.ops.render.render(write_still=True)
+        exit(0)
 
     if not args.skip_animating:
         ref_view = views[args.anim_ref_view]
