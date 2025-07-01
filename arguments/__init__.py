@@ -58,6 +58,7 @@ class ModelParams(ParamGroup):
         self.gamma = False
         self.metallic = False
         # Ours
+        self.material = False
         self.mask_gt = False # whether to mask GT images during training
         self.masks = "" # foreground masks directory name, empty if not used
         self.depths = "" # depths directory name, empty if not used
@@ -124,7 +125,7 @@ class OptimizationParams(ParamGroup):
         self.lambda_tv_envmap = 0.01
         # Ours
         self.geometry_from_iter = 5000
-        self.material_from_iter = 5000
+        self.material_from_iter = 30_000
         self.mv_angle_threshold = 30
         self.mv_angle_factor = 2.0
         self.mv_occlusion_threshold = 5e-4

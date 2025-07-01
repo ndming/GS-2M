@@ -24,14 +24,17 @@ from scene import Scene, GaussianModel
 from fused_ssim import fused_ssim
 
 from pbr import pbr_shading
-import nvdiffrast.torch as dr
 import torch.nn.functional as F
 
 from utils.general_utils import safe_state
-from utils.loss_utils import l1_loss, planar_loss, sparse_loss, tv_loss, masked_tv_loss, multi_view_loss, depth_normal_loss, luminance_loss
+from utils.loss_utils import l1_loss, planar_loss, sparse_loss, tv_loss, masked_tv_loss, multi_view_loss, depth_normal_loss
 from utils.training_utils import prepare_outdir, prepare_logger, report_training
 
 def train(model, opt, pipe, test_iterations, save_iterations, checkpoint_iterations, checkpoint):
+    if model.material:
+        print("[>] Training with material optimization enabled")
+        opt.material_from_iter = opt.geometry_from_iter
+
     prepare_outdir(model)
     tb_writer = prepare_logger(model)
 
@@ -79,9 +82,10 @@ def train(model, opt, pipe, test_iterations, save_iterations, checkpoint_iterati
             viewpoint_stack = scene.getTrainCameras().copy()
         viewpoint_cam = viewpoint_stack.pop(randint(0, len(viewpoint_stack) - 1))
 
-        # Render
         geometry_stage = iteration > opt.geometry_from_iter
         material_stage = iteration > opt.material_from_iter
+
+        # Render
         render_pkg = render(
             viewpoint_cam, gaussians, pipe, background, geometry_stage, material_stage,
             sobel_normal=geometry_stage, inference=False, pad_normal=False)
@@ -245,7 +249,7 @@ def train(model, opt, pipe, test_iterations, save_iterations, checkpoint_iterati
                     radii2D_threshold = opt.radii2D_threshold if iteration > opt.opacity_reset_interval else None
                     gaussians.densify_and_prune(
                         opt.densify_grad_threshold, opt.densify_grad_abs_threshold, opt.opacity_prune_threshold,
-                        scene.cameras_extent, radii2D_threshold)
+                        scene.cameras_extent, radii2D_threshold, geometry_stage)
 
             # Multi-view observe trim
             if opt.use_multi_view_trim and iteration % 1000 == 0 and iteration < opt.densify_until_iter:

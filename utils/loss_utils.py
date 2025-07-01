@@ -21,7 +21,6 @@ from torch.autograd import Variable
 from math import exp
 
 from gaussian_renderer import render
-from utils.image_utils import erode
 
 def l1_loss(network_output, gt):
     return torch.abs((network_output - gt)).mean()
@@ -115,7 +114,6 @@ def depth_normal_loss(normal_map, sobel_normal_map, gt_image, weight_map=None):
     weights = (1.0 - _get_img_grad_weight(gt_image)).clamp(0, 1).detach() ** 2
     if weight_map is not None:
         weights *= weight_map.squeeze()
-    # image_weight = erode(image_weight[None, None], ksize=5).squeeze()
     loss = (weights * (sobel_normal_map - normal_map).abs().sum(dim=0)).mean()
     return loss
 
@@ -241,21 +239,21 @@ def multi_view_loss(scene, viewpoint_cam, opt, render_pkg, pipe, bg_color, mater
     ncc = ncc[ncc_mask].squeeze()
     ncc_loss = ncc.mean() if ncc_mask.sum() > 0 else 0.0
 
-    if material_stage:
-        rough_map = render_pkg["roughness_map"] # (1, H, W)
-        h_map, w_map = rough_map.squeeze().shape
-        grid_map = pixels.reshape(-1, 1, 2).float()
-        grid_map = grid_map.clone()
-        grid_map[:, :, 0] = 2 * grid_map[:, :, 0] / (w_map - 1.0) - 1.0
-        grid_map[:, :, 1] = 2 * grid_map[:, :, 1] / (h_map - 1.0) - 1.0
-        rough_vals = F.grid_sample(rough_map.unsqueeze(1), grid_map.view(1, -1, 1, 2), align_corners=True)
-        rough_vals = rough_vals.squeeze() # (N,) valid_indices
-        smooth_mask =  ncc_mask
-        varied_mask = ~ncc_mask
-        if varied_mask.sum() > 0:
-            ncc_loss += 0.06 * rough_vals[varied_mask].mean()
-        if smooth_mask.sum() > 0:
-            ncc_loss -= 0.01 * rough_vals[smooth_mask].mean()
+    # if material_stage:
+    #     rough_map = render_pkg["roughness_map"] # (1, H, W)
+    #     h_map, w_map = rough_map.squeeze().shape
+    #     grid_map = pixels.reshape(-1, 1, 2).float()
+    #     grid_map = grid_map.clone()
+    #     grid_map[:, :, 0] = 2 * grid_map[:, :, 0] / (w_map - 1.0) - 1.0
+    #     grid_map[:, :, 1] = 2 * grid_map[:, :, 1] / (h_map - 1.0) - 1.0
+    #     rough_vals = F.grid_sample(rough_map.unsqueeze(1), grid_map.view(1, -1, 1, 2), align_corners=True)
+    #     rough_vals = rough_vals.squeeze() # (N,) valid_indices
+    #     smooth_mask =  ncc_mask
+    #     varied_mask = ~ncc_mask
+    #     if varied_mask.sum() > 0:
+    #         ncc_loss += 0.06 * rough_vals[varied_mask].mean()
+    #     if smooth_mask.sum() > 0:
+    #         ncc_loss -= 0.01 * rough_vals[smooth_mask].mean()
 
         # rough_weights = (1.0 - rough_vals).clamp(0.0, 1.0).detach()
         # pixel_loss = 0.2 * (rough_weights * pixel_noise[valid_indices]).mean() if valid_indices.sum() > 0 else 0.0
@@ -418,7 +416,7 @@ def _loss_ncc(ref, nea):
     ncc = 1 - cc
     ncc = torch.clamp(ncc, 0.0, 2.0)
     ncc = torch.mean(ncc, dim=1, keepdim=True)
-    mask = (ncc < 0.8)
+    mask = (ncc < 0.9)
     return ncc, mask
 
 def _bilateral_weighted_ncc(ref, nea, sigma_g=0.1, sigma_x=1.0):

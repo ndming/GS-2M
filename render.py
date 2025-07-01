@@ -213,7 +213,6 @@ if __name__ == "__main__":
         args.filter_depth = False
         args.extract_mesh = True
         args.skip_test = True
-        args.rgb_color = True
 
     if args.tnt:
         tnt_360_scenes = ['barn', 'caterpillar', 'ignatius', 'truck']
@@ -225,7 +224,6 @@ if __name__ == "__main__":
         args.filter_depth = True
         args.extract_mesh = True
         args.skip_test = True
-        args.rgb_color = True
 
         voxel_size = 0.002
 
@@ -253,6 +251,9 @@ if __name__ == "__main__":
         args.skip_test = False
         args.normal_world = True
         model.white_background = True
+
+    if not model.material:
+        args.rgb_color = True
 
     with torch.no_grad():
         gaussians = GaussianModel(model.sh_degree)
