@@ -123,17 +123,12 @@ class CubemapLight(nn.Module):
         sintheta, costheta = torch.sin(gy * np.pi), torch.cos(gy * np.pi)
         sinphi, cosphi = torch.sin(gx * np.pi), torch.cos(gx * np.pi)
 
-        reflvec = torch.stack(
-            (sintheta * sinphi, costheta, -sintheta * cosphi), dim=-1
-        )  # [H, W, 3]
+        reflvec = torch.stack((sintheta * sinphi, costheta, -sintheta * cosphi), dim=-1) # (H, W, 3)
         color = dr.texture(
             self.base[None, ...],
             reflvec[None, ...].contiguous(),
             filter_mode="linear",
-            boundary_mode="cube",
-        )[
-            0
-        ]  # [H, W, 3]
+            boundary_mode="cube")[0] # (H, W, 3)
         if return_img:
             return color
         else:

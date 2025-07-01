@@ -23,7 +23,7 @@ from gaussian_renderer import render
 from scene import Scene, GaussianModel
 from fused_ssim import fused_ssim
 
-from pbr import pbr_shading, linear_to_srgb
+from pbr import pbr_shading
 import nvdiffrast.torch as dr
 import torch.nn.functional as F
 
@@ -196,13 +196,13 @@ def train(model, opt, pipe, test_iterations, save_iterations, checkpoint_iterati
             # Lenv = tv_h1 + tv_w1
 
             # Luminance loss
-            diffuse_map = linear_to_srgb(pbr_pkg["diffuse_rgb"]).clamp(0, 1).permute(2, 0, 1) # (3, H, W)
-            diffuse_map = torch.where(normal_mask, diffuse_map, background[:, None, None])
-            lambda_luminance = opt.lambda_luminance
+            # diffuse_map = linear_to_srgb(pbr_pkg["diffuse_rgb"]).clamp(0, 1).permute(2, 0, 1) # (3, H, W)
+            # diffuse_map = torch.where(normal_mask, diffuse_map, background[:, None, None])
+            # lambda_luminance = opt.lambda_luminance
             # Llm = luminance_loss(diffuse_map, diffuse_ref, normal_mask)
-            Llm = (diffuse_map - diffuse_ref).abs().mean()
+            # Llm = (diffuse_map - diffuse_ref).abs().mean()
 
-            Lmat = (1.0 - lambda_ssim) * Lpbr + lambda_tv_smooth * Lsm + lambda_luminance * Llm
+            Lmat = (1.0 - lambda_ssim) * Lpbr + lambda_tv_smooth * Lsm # + lambda_luminance * Llm
             loss += Lmat
 
         loss.backward()

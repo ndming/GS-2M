@@ -55,7 +55,7 @@ class ModelParams(ParamGroup):
         self.data_device = "cuda"
         self.eval = False
         # GS-IR
-        self.gamma = True
+        self.gamma = False
         self.metallic = False
         # Ours
         self.mask_gt = False # whether to mask GT images during training

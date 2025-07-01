@@ -67,9 +67,7 @@ def report_training(
         _, background = render_args
         white_bg = torch.all(background == 1).item()
 
-        envmap = dr.texture(
-            scene.cubemap.base[None, ...], scene.envmap_dirs[None, ...].contiguous(),
-            filter_mode="linear", boundary_mode="cube")[0].permute(2, 0, 1) # (3, H, W)
+        envmap = scene.cubemap.export_envmap(return_img=True).clamp(min=0.0).permute(2, 0, 1) # (3, H, W)
         if tb_writer:
             tb_writer.add_images("scene/envmap", envmap[None], global_step=iteration)
 
@@ -123,8 +121,10 @@ def report_training(
                         gamma=gamma,
                         white_background=white_bg)
                     
-                    diffuse_map = linear_to_srgb(pbr_pkg["diffuse_rgb"]).clamp(0.0, 1.0).permute(2, 0, 1) # (3, H, W)
-                    specular_map = linear_to_srgb(pbr_pkg["specular_rgb"]).clamp(0.0, 1.0).permute(2, 0, 1) # (3, H, W)
+                    diffuse_map = linear_to_srgb(pbr_pkg["diffuse_rgb"]) if gamma else pbr_pkg["diffuse_rgb"]
+                    diffuse_map = diffuse_map.clamp(0.0, 1.0).permute(2, 0, 1) # (3, H, W)
+                    specular_map = linear_to_srgb(pbr_pkg["specular_rgb"]) if gamma else pbr_pkg["specular_rgb"]
+                    specular_map = specular_map.clamp(0.0, 1.0).permute(2, 0, 1) # (3, H, W)
                     pbr_render = pbr_pkg["render_rgb"].clamp(0.0, 1.0).permute(2, 0, 1) # (3, H, W)
 
                     pbr_render = torch.where(normal_mask, pbr_render, background[:, None, None])
