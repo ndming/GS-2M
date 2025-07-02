@@ -18,7 +18,7 @@ runtimes = []
 for scene in scenes:
     scene_start = time.time()
 
-    common_args = f"-r 2 --material_from_iter 30000"
+    common_args = f"-r 2"
     cmd = f'python train.py -s {data_base_path}/scan{scene} -m {out_base_path}/scan{scene} {common_args}'
     print("[>] " + cmd)
     os.system(cmd)
@@ -53,7 +53,7 @@ runtimes = []
 for scene in scenes:
     scene_start = time.time()
 
-    common_args = f"-r 2"
+    common_args = f"-r 2 --material"
     cmd = f'python train.py -s {data_base_path}/scan{scene} -m {out_base_path}/scan{scene} {common_args}'
     print("[>] " + cmd)
     os.system(cmd)

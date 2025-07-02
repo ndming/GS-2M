@@ -98,7 +98,7 @@ def format_points(points):
 
 if __name__ == "__main__":
     parser = ArgumentParser(description="Calculate average Chamfer metrics.")
-    parser.add_argument("--output_base_dir", "-d", type=str, required=True, help="Path to the model parent directory")
+    parser.add_argument("--output_base_dir", "-d", type=str, defaul="output/dtu", help="Path to the model parent directory")
     parser.add_argument("--method", "-m", type=str, default="ours_30000")
     parser.add_argument("--latex", action="store_true", help="Output results in lines separated by & for LaTeX table")
     args = parser.parse_args()

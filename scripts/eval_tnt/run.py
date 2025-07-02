@@ -39,9 +39,11 @@ import numpy as np
 import open3d as o3d
 import os
 import argparse
-# import torch
+import torch
+import json
 
 from config import scenes_tau_dict
+from help_func import auto_orient_and_center_poses
 from registration import (
     trajectory_alignment,
     registration_vol_ds,
@@ -119,7 +121,6 @@ def run_evaluation(dataset_dir, traj_path, ply_path, out_dir, view_crop):
         for i in range(len(ld)):
             traj_to_register.append(CameraPose(meta=None, mat=ld[i]))
     elif traj_path.endswith('.json'): # instant-npg or sdfstudio format
-        import json
         with open(traj_path, encoding='UTF-8') as f:
             meta = json.load(f)
         poses_dict = {}
@@ -191,6 +192,11 @@ def run_evaluation(dataset_dir, traj_path, ply_path, out_dir, view_crop):
     print("recall : %.4f" % eva[1])
     print("f-score : %.4f" % eva[2])
     print("==============================")
+
+    # Save precision, recall, fscore to .json file
+    eval_file = os.path.join(out_dir, "results.json")
+    with open(eval_file, "w") as f:
+        json.dump({ "precision": precision, "recall": recall, "fscore": fscore }, f, indent=2)
 
     # Plotting
     plot_graph(
