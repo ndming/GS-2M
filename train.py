@@ -23,7 +23,7 @@ from gaussian_renderer import render
 from scene import Scene, GaussianModel
 from fused_ssim import fused_ssim
 
-from pbr import pbr_shading
+from pbr import pbr_render
 import torch.nn.functional as F
 
 from utils.general_utils import safe_state
@@ -32,8 +32,11 @@ from utils.training_utils import prepare_outdir, prepare_logger, report_training
 
 def train(model, opt, pipe, test_iterations, save_iterations, checkpoint_iterations, checkpoint):
     if model.material:
-        print("[>] Training with material optimization enabled")
         opt.material_from_iter = opt.geometry_from_iter
+        print("[>] Enabled material optimization")
+    else:
+        opt.material_from_iter = opt.iterations
+        print("[>] Disabled material optimization")
 
     prepare_outdir(model)
     tb_writer = prepare_logger(model)
@@ -143,45 +146,16 @@ def train(model, opt, pipe, test_iterations, save_iterations, checkpoint_iterati
         # Material losses
         Lmat = torch.tensor([0.0])
         if material_stage:
-            H, W = viewpoint_cam.image_height, viewpoint_cam.image_width
-            c2w = viewpoint_cam.world_view_transform[:3, :3]
-            view_dirs = -(canonical_rays @ c2w.T).reshape(H, W, 3) # (H, W, 3)
-
-            # Normals to world space
-            normals = render_pkg["normal_map"].permute(1, 2, 0).reshape(-1, 3) # (H * W, 3)
-            normals = normals @ c2w.T # (H * W, 3)
-            normal_map = normals.reshape(H, W, 3).permute(2, 0, 1) # (3, H, W)
-            normal_map = torch.where(
-                torch.norm(normal_map, dim=0, keepdim=True) > 0,
-                F.normalize(normal_map, dim=0, p=2), normal_map)
+            # PBR rendering
+            pbr_pkg, metallic_map = pbr_render(
+                scene, viewpoint_cam, canonical_rays, render_pkg, background,
+                model.metallic, model.gamma)
 
             normal_mask = render_pkg["normal_mask"] # (1, H, W)
-            scene.cubemap.build_mips() # build mip for environment light
-
             albedo_map = render_pkg["albedo_map"] # (3, H, W)
-            metallic_map = render_pkg["metallic_map"] # (1, H, W)
             roughness_map = render_pkg["roughness_map"] # (1, H, W)
-            # rmax, rmin = 1.0, 0.001
-            # roughness_map = roughness_map * (rmax - rmin) + rmin
 
-            if not model.metallic:
-                metallic_map = (1.0 - render_pkg["roughness_map"]).clamp(0, 1).detach() # (1, H, W)
-                metallic_map = torch.where(normal_mask, metallic_map, background[:, None, None])
-
-            pbr_pkg = pbr_shading(
-                light=scene.cubemap,
-                normals=normal_map.permute(1, 2, 0).detach(), # (H, W, 3)
-                view_dirs=view_dirs,
-                mask=normal_mask.permute(1, 2, 0), # (H, W, 1)
-                albedo=albedo_map.permute(1, 2, 0), # (H, W, 3)
-                roughness=roughness_map.permute(1, 2, 0), # (H, W, 1)
-                metallic=metallic_map.permute(1, 2, 0), # (H, W, 1)
-                occlusion=torch.ones_like(roughness_map).permute(1, 2, 0),
-                irradiance=torch.zeros_like(roughness_map).permute(1, 2, 0),
-                brdf_lut=scene.brdf_lut,
-                gamma=model.gamma,
-                white_background=model.white_background)
-
+            # PBR loss
             render_pbr = pbr_pkg["render_rgb"].permute(2, 0, 1) # (3, H, W)
             render_pbr = torch.where(normal_mask, render_pbr, background[:, None, None])
             Lssim = 1.0 - fused_ssim(render_pbr.unsqueeze(0), gt_image.unsqueeze(0))
@@ -235,7 +209,7 @@ def train(model, opt, pipe, test_iterations, save_iterations, checkpoint_iterati
             pbr_stats = iteration > opt.material_from_iter
             report_training(
                 tb_writer, iteration, Lrgb, Lgeo, Lmat, loss, iter_start.elapsed_time(iter_end), test_iterations,
-                scene, model.metallic, model.gamma, render, (pipe, background), pbr_shading, pbr_stats, canonical_rays)
+                scene, model.metallic, model.gamma, render, (pipe, background), pbr_stats, canonical_rays)
 
             if (iteration in save_iterations):
                 tqdm.write(f"[ITER {iteration:>5}] Saving Gaussians and lighting")

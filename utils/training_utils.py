@@ -4,12 +4,12 @@ import uuid
 
 import torch.nn.functional as F
 import nvdiffrast.torch as dr
+from pbr import pbr_render, linear_to_srgb
 
 from argparse import Namespace
 from pathlib import Path
 from tqdm import tqdm
 
-from pbr import linear_to_srgb
 from utils.image_utils import psnr, convert_normal_for_save, convert_depth_for_save
 from utils.loss_utils import l1_loss
 
@@ -48,7 +48,7 @@ def prepare_logger(args):
 
 def report_training(
         tb_writer, iteration, Lrgb, Lgeo, Lmat, loss, elapsed, testing_iterations,
-        scene, metallic, gamma, render_func, render_args, pbr_func, pbr_stats, canonical_rays):
+        scene, metallic, gamma, rgb_render, render_args, pbr_stats, canonical_rays):
     if tb_writer:
         tb_writer.add_scalar('train_loss_patches/Lrgb', Lrgb.item(), iteration)
         tb_writer.add_scalar('train_loss_patches/Lgeo', Lgeo.item(), iteration)
@@ -79,57 +79,23 @@ def report_training(
                 psnr_test_pbr = 0.0
 
                 for idx, viewpoint in enumerate(config['cameras']):
-                    render_pkg = render_func(viewpoint, scene.gaussians, *render_args, True, True, True)
-                    image = torch.clamp(render_pkg["render"], 0.0, 1.0)
-                    gt_image = torch.clamp(viewpoint.gt_image.to("cuda"), 0.0, 1.0)
-                    stem = viewpoint.image_name.rsplit('.', 1)[0]
+                    render_pkg = rgb_render(viewpoint, scene.gaussians, *render_args, True, True, True)
+                    pbr_pkg, _ = pbr_render(scene, viewpoint, canonical_rays, render_pkg, background, metallic, gamma)
 
-                    H, W = viewpoint.image_height, viewpoint.image_width
-                    c2w = viewpoint.world_view_transform[:3, :3]
-                    view_dirs = -(canonical_rays @ c2w.T).reshape(H, W, 3)
-
-                    normals = render_pkg["normal_map"].permute(1, 2, 0).reshape(-1, 3) # (H * W, 3)
-                    normals = normals @ c2w.T # (H * W, 3)
-                    normal_map = normals.reshape(H, W, 3).permute(2, 0, 1) # (3, H, W)
-                    normal_map = torch.where(
-                        torch.norm(normal_map, dim=0, keepdim=True) > 0,
-                        F.normalize(normal_map, dim=0, p=2), normal_map)
-
-                    normal_mask = render_pkg["normal_mask"] # (1, H, W)
-                    scene.cubemap.build_mips() # build mip for environment light
-
-                    albedo_map = render_pkg["albedo_map"] # (3, H, W)
-                    roughness_map = render_pkg["roughness_map"] # (1, H, W)
-                    metallic_map = render_pkg["metallic_map"] # (1, H, W)
-                    # rmax, rmin = 1.0, 0.001
-                    # roughness_map = roughness_map * (rmax - rmin) + rmin
-                    if not metallic:
-                        metallic_map = (1.0 - render_pkg["roughness_map"]).clamp(0, 1) # (1, H, W)
-                        metallic_map = torch.where(normal_mask, metallic_map, background[:, None, None])
-
-                    pbr_pkg = pbr_func(
-                        light=scene.cubemap,
-                        normals=normal_map.permute(1, 2, 0),
-                        view_dirs=view_dirs,
-                        mask=normal_mask.permute(1, 2, 0), # (H, W, 1)
-                        albedo=albedo_map.permute(1, 2, 0), # (H, W, 3)
-                        roughness=roughness_map.permute(1, 2, 0), # (H, W, 1)
-                        metallic=metallic_map.permute(1, 2, 0), # (H, W, 1)
-                        occlusion=torch.ones_like(roughness_map).permute(1, 2, 0),
-                        irradiance=torch.zeros_like(roughness_map).permute(1, 2, 0),
-                        brdf_lut=scene.brdf_lut,
-                        gamma=gamma,
-                        white_background=white_bg)
-                    
                     diffuse_map = linear_to_srgb(pbr_pkg["diffuse_rgb"]) if gamma else pbr_pkg["diffuse_rgb"]
                     diffuse_map = diffuse_map.clamp(0.0, 1.0).permute(2, 0, 1) # (3, H, W)
                     specular_map = linear_to_srgb(pbr_pkg["specular_rgb"]) if gamma else pbr_pkg["specular_rgb"]
                     specular_map = specular_map.clamp(0.0, 1.0).permute(2, 0, 1) # (3, H, W)
-                    pbr_render = pbr_pkg["render_rgb"].clamp(0.0, 1.0).permute(2, 0, 1) # (3, H, W)
+                    pbr_image = pbr_pkg["render_rgb"].clamp(0.0, 1.0).permute(2, 0, 1) # (3, H, W)
 
-                    pbr_render = torch.where(normal_mask, pbr_render, background[:, None, None])
+                    normal_mask = render_pkg["normal_mask"] # (1, H, W)
+                    pbr_image = torch.where(normal_mask, pbr_image, background[:, None, None])
                     diffuse_map = torch.where(normal_mask, diffuse_map, background[:, None, None])
                     specular_map = torch.where(normal_mask, specular_map, background[:, None, None])
+
+                    image = torch.clamp(render_pkg["render"], 0.0, 1.0)
+                    gt_image = torch.clamp(viewpoint.gt_image.to("cuda"), 0.0, 1.0)
+                    stem = viewpoint.image_name.rsplit('.', 1)[0]
 
                     if tb_writer and (idx < 5):
                         tb_writer.add_images(config['name'] + f"_{stem}/rgb_render", image[None], global_step=iteration)
@@ -146,14 +112,14 @@ def report_training(
                                     render_pkg[key] = torch.where(normal_mask, 1.0 - render_pkg["roughness_map"], background[:, None, None])
                                 tb_writer.add_images(config['name'] + f"_{stem}/{key}", render_pkg[key][None], global_step=iteration)
     
-                        tb_writer.add_images(config['name'] + f"_{stem}/z_pbr_render", pbr_render[None], global_step=iteration)
+                        tb_writer.add_images(config['name'] + f"_{stem}/z_pbr_render", pbr_image[None], global_step=iteration)
                         tb_writer.add_images(config['name'] + f"_{stem}/z_shade_diffuse", diffuse_map[None], global_step=iteration)
                         tb_writer.add_images(config['name'] + f"_{stem}/z_shade_specular", specular_map[None], global_step=iteration)
 
                     l1_test_rgb += l1_loss(image, gt_image).mean().double()
-                    l1_test_pbr += l1_loss(pbr_render, gt_image).mean().double()
+                    l1_test_pbr += l1_loss(pbr_image, gt_image).mean().double()
                     psnr_test_rgb += psnr(image, gt_image).mean().double()
-                    psnr_test_pbr += psnr(pbr_render, gt_image).mean().double()
+                    psnr_test_pbr += psnr(pbr_image, gt_image).mean().double()
 
                 psnr_test_rgb /= len(config['cameras'])
                 psnr_test_pbr /= len(config['cameras'])

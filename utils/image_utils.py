@@ -34,10 +34,15 @@ def erode(bin_img, ksize=5):
     return out
 
 def convert_background_color(image: Image.Image, bg_color):
-    im_data = np.array(image.convert("RGBA"))
-    norm_data = im_data / 255.0
-    arr = norm_data[:,:,:3] * norm_data[:, :, 3:4] + bg_color * (1 - norm_data[:, :, 3:4])
-    converted_image = Image.fromarray(np.array(arr * 255.0, dtype=np.byte), "RGB")
+    im_data = np.array(image.convert("RGBA")) / 255.0
+    rgb = im_data[:, :, :3]
+    alpha = im_data[:, :, 3:4]
+
+    blended_rgb = rgb * alpha + bg_color * (1 - alpha)
+    rgba = np.concatenate((blended_rgb, alpha), axis=2)
+    rgba_uint8 = (rgba * 255).astype(np.uint8)
+
+    converted_image = Image.fromarray(rgba_uint8, "RGBA")
     return converted_image
 
 def process_input_image(pil_image: Image.Image, resolution, mask_gt=False, pil_mask=None):
