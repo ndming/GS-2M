@@ -109,11 +109,16 @@ def _erode_cv(img_in, erode_size=4):
 
     return img_out
 
-def depth_normal_loss(normal_map, sobel_normal_map, gt_image, weight_map=None):
+def depth_normal_loss(normal_map, sobel_normal_map, gt_image=None, weight_map=None):
     # normal_map, sobel_normal_map, gt_image: (3, H, W), weight_map: (1, H, W)
-    weights = (1.0 - _get_img_grad_weight(gt_image)).clamp(0, 1).detach() ** 2
+    _, h, w = normal_map.shape
+    weights = torch.ones((h, w), device=normal_map.device, dtype=normal_map.dtype)  # (H, W)
+
+    if gt_image is not None:
+        weights *= (1.0 - _get_img_grad_weight(gt_image)).clamp(0, 1).detach() ** 2
     if weight_map is not None:
         weights *= weight_map.squeeze()
+
     loss = (weights * (sobel_normal_map - normal_map).abs().sum(dim=0)).mean()
     return loss
 
@@ -522,7 +527,7 @@ def masked_tv_loss(
     erosion: bool = False,
 ) -> torch.Tensor:
     rgb_grad_h = torch.exp(-(gt_image[:, 1:, :] - gt_image[:, :-1, :]).abs().mean(dim=0, keepdim=True)) # (1, H-1, W)
-    rgb_grad_w = torch.exp(-(gt_image[:, :, 1:] - gt_image[:, :, :-1]).abs().mean(dim=0, keepdim=True)) # (1, H-1, W)
+    rgb_grad_w = torch.exp(-(gt_image[:, :, 1:] - gt_image[:, :, :-1]).abs().mean(dim=0, keepdim=True)) # (1, H, W-1)
     # tv_h = torch.pow(prediction[:, 1:, :] - prediction[:, :-1, :], 2) # (C, H-1, W)
     # tv_w = torch.pow(prediction[:, :, 1:] - prediction[:, :, :-1], 2) # (C, H, W-1)
     tv_h = (prediction[:, 1:, :] - prediction[:, :-1, :]).abs() # (C, H-1, W)
