@@ -109,17 +109,12 @@ def _erode_cv(img_in, erode_size=4):
 
     return img_out
 
-def depth_normal_loss(normal_map, sobel_normal_map, gt_image=None, weight_map=None):
-    # normal_map, sobel_normal_map, gt_image: (3, H, W), weight_map: (1, H, W)
-    _, h, w = normal_map.shape
-    weights = torch.ones((h, w), device=normal_map.device, dtype=normal_map.dtype)  # (H, W)
-
-    if gt_image is not None:
-        weights *= (1.0 - _get_img_grad_weight(gt_image)).clamp(0, 1).detach() ** 2
+def depth_normal_loss(normal_map, sobel_map, gt_image, weight_map=None):
+    # normal_map, sobel_map, gt_image: (3, H, W), weight_map: (1, H, W)
+    weights = (1.0 - _get_img_grad_weight(gt_image)).clamp(0, 1).detach() ** 2
     if weight_map is not None:
         weights *= weight_map.squeeze()
-
-    loss = (weights * (sobel_normal_map - normal_map).abs().sum(dim=0)).mean()
+    loss = (weights * (sobel_map - normal_map).abs().sum(dim=0)).mean()
     return loss
 
 def _get_img_grad_weight(img):
@@ -207,7 +202,7 @@ def multi_view_loss(scene, viewpoint_cam, opt, render_pkg, pipe, bg_color, mater
         offsets = _patch_offsets(opt.multi_view_patch_size, pixels.device)
         ori_pixels_patch = pixels.reshape(-1, 1, 2) / ncc_scale + offsets.float()
 
-        gt_image_gray = viewpoint_cam.gray_image # (1, H, W)
+        gt_image_gray = viewpoint_cam.gray_image.cuda() # (1, H, W)
         h, w = gt_image_gray.squeeze().shape
         pixels_patch = ori_pixels_patch.clone()
         pixels_patch[:, :, 0] = 2 * pixels_patch[:, :, 0] / (w - 1) - 1.0
@@ -233,7 +228,7 @@ def multi_view_loss(scene, viewpoint_cam, opt, render_pkg, pipe, bg_color, mater
     grid = _patch_warp(H_rn.reshape(-1, 3, 3), ori_pixels_patch)
     grid[:, :, 0] = 2 * grid[:, :, 0] / (w - 1) - 1.0
     grid[:, :, 1] = 2 * grid[:, :, 1] / (h - 1) - 1.0
-    nearest_image_gray = nearest_cam.gray_image
+    nearest_image_gray = nearest_cam.gray_image.cuda()
     sampled_gray_val = F.grid_sample(nearest_image_gray[None], grid.reshape(1, -1, 1, 2), align_corners=True)
     sampled_gray_val = sampled_gray_val.reshape(-1, total_patch_size)
 

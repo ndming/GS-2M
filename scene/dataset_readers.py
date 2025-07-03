@@ -23,7 +23,6 @@ from scene.colmap_loader import read_extrinsics_text, read_intrinsics_text, qvec
     read_extrinsics_binary, read_intrinsics_binary, read_points3D_binary, read_points3D_text
 
 from utils.graphics_utils import getWorld2View2, fov2focal
-from utils.image_utils import convert_background_color
 from utils.sh_utils import SH2RGB
 
 class CameraInfo(NamedTuple):
@@ -70,7 +69,7 @@ def getNerfppNorm(cam_info):
 
     return {"translate": translate, "radius": radius}
 
-def readColmapCameras(cam_extrinsics, cam_intrinsics, image_dir, mask_dir, depth_dir, white_bg):
+def readColmapCameras(cam_extrinsics, cam_intrinsics, image_dir, mask_dir, depth_dir):
     cam_infos = []
     for key in cam_extrinsics:
         extr = cam_extrinsics[key]
@@ -95,14 +94,10 @@ def readColmapCameras(cam_extrinsics, cam_intrinsics, image_dir, mask_dir, depth
         image_name = extr.name
         image_stem = Path(image_path).stem
 
-        image = Image.open(image_path)
-        if white_bg:
-            bg_color = np.array([1, 1, 1])
-            image = convert_background_color(image, bg_color)
-
         mask_path  = os.path.join(mask_dir,  f"{image_stem}.png") if mask_dir  != "" else ""
         depth_path = os.path.join(depth_dir, f"{image_stem}.png") if depth_dir != "" else ""
 
+        image = Image.open(image_path)
         mask = Image.open(mask_path) if mask_path != "" else None
         depth = Image.open(depth_path) if depth_path != "" else None
 
@@ -143,7 +138,7 @@ def storePly(path, xyz, rgb):
     ply_data = PlyData([vertex_element])
     ply_data.write(path)
 
-def readColmapSceneInfo(path, images, masks, depths, eval, white_background, llffhold=8):
+def readColmapSceneInfo(path, images, masks, depths, eval, llffhold=8):
     try:
         cameras_extrinsic_file = os.path.join(path, "sparse/0", "images.bin")
         cameras_intrinsic_file = os.path.join(path, "sparse/0", "cameras.bin")
@@ -160,7 +155,7 @@ def readColmapSceneInfo(path, images, masks, depths, eval, white_background, llf
     mask_dir = os.path.join(path, masks) if masks != "" else ""
     cam_infos_unsorted = readColmapCameras(
         cam_extrinsics=cam_extrinsics, cam_intrinsics=cam_intrinsics,
-        image_dir=image_dir, mask_dir=mask_dir, depth_dir=depth_dir, white_bg=white_background)
+        image_dir=image_dir, mask_dir=mask_dir, depth_dir=depth_dir)
     cam_infos = sorted(cam_infos_unsorted.copy(), key = lambda x : x.image_name)
 
     if eval:
@@ -195,7 +190,7 @@ def readColmapSceneInfo(path, images, masks, depths, eval, white_background, llf
         ply_path=ply_path)
     return scene_info
 
-def readCamerasFromTransforms(path, transformsfile, depth_dir, white_background, extension=".png"):
+def readCamerasFromTransforms(path, transformsfile, depth_dir, extension=".png"):
     cam_infos = []
 
     with open(os.path.join(path, transformsfile)) as json_file:
@@ -220,10 +215,7 @@ def readCamerasFromTransforms(path, transformsfile, depth_dir, white_background,
             image_stem = Path(cam_name).stem
             image_name = Path(cam_name).name
 
-            pil_image = Image.open(image_path)
-            bg_color = np.array([1, 1, 1]) if white_background else np.array([0, 0, 0])
-            image = convert_background_color(pil_image, bg_color)
-            image.filename = pil_image.filename
+            image = Image.open(image_path)
             focal = fov2focal(fovx, image.size[0])
 
             depth_path = os.path.join(depth_dir, f"{image_stem}.png") if depth_dir != "" else ""
@@ -236,12 +228,12 @@ def readCamerasFromTransforms(path, transformsfile, depth_dir, white_background,
 
     return cam_infos
 
-def readNerfSyntheticInfo(path, white_background, depths, eval, extension=".png"):
+def readNerfSyntheticInfo(path, depths, eval, extension=".png"):
     depth_dir = os.path.join(path, depths) if depths != "" else ""
     print("[>] Reading training transforms...")
-    train_cam_infos = readCamerasFromTransforms(path, "transforms_train.json", depth_dir, white_background, extension)
+    train_cam_infos = readCamerasFromTransforms(path, "transforms_train.json", depth_dir, extension)
     print("[>] Reading test transforms...")
-    test_cam_infos = readCamerasFromTransforms(path, "transforms_test.json", depth_dir, white_background, extension)
+    test_cam_infos = readCamerasFromTransforms(path, "transforms_test.json", depth_dir, extension)
     
     if not eval:
         train_cam_infos.extend(test_cam_infos)

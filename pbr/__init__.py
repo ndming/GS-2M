@@ -9,8 +9,8 @@ __all__ = ["CubemapLight", "get_brdf_lut", "pbr_shading", "saturate_dot", "linea
 def pbr_render(scene, viewpoint_cam, canonical_rays, render_pkg, metallic, gamma=False):
     # Build mips for environment light
     scene.cubemap.build_mips()
-    normal_mask = render_pkg["normal_mask"] # (1, H, W)
 
+    # View directions in camera space
     H, W = viewpoint_cam.image_height, viewpoint_cam.image_width
     c2w = viewpoint_cam.world_view_transform[:3, :3]
     view_dirs = -(canonical_rays @ c2w.T).reshape(H, W, 3) # (H, W, 3)
@@ -29,8 +29,9 @@ def pbr_render(scene, viewpoint_cam, canonical_rays, render_pkg, metallic, gamma
 
     # If not training metallic, estimate it from roughness
     if not metallic:
+        alpha_map = render_pkg["alpha_map"].detach() # (1, H, W)
         metallic_map = (1.0 - roughness_map).clamp(0, 1).detach() # (1, H, W)
-        metallic_map = torch.where(normal_mask, metallic_map, .0)
+        metallic_map = alpha_map * metallic_map # (1, H, W)
 
     pbr_pkg = pbr_shading(
         light=scene.cubemap,
@@ -43,5 +44,7 @@ def pbr_render(scene, viewpoint_cam, canonical_rays, render_pkg, metallic, gamma
         irradiance=torch.zeros_like(roughness_map).permute(1, 2, 0),
         brdf_lut=scene.brdf_lut,
         gamma=gamma)
-    return pbr_pkg, metallic_map
+
+    pbr_pkg.update({ "roughness_map": roughness_map, "metallic_map": metallic_map })
+    return pbr_pkg
 

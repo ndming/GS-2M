@@ -48,7 +48,7 @@ def prepare_logger(args):
 
 def report_training(
         tb_writer, iteration, Lrgb, Lgeo, Lmat, loss, elapsed, testing_iterations,
-        scene, metallic, gamma, rgb_render, render_args, pbr_stats, canonical_rays):
+        scene, metallic, gamma, rgb_render, pipe, white, pbr_stats, canonical_rays):
     if tb_writer:
         tb_writer.add_scalar('train_loss_patches/Lrgb', Lrgb.item(), iteration)
         tb_writer.add_scalar('train_loss_patches/Lgeo', Lgeo.item(), iteration)
@@ -64,8 +64,8 @@ def report_training(
             {'name': 'test',  'cameras': scene.getTestCameras()}, 
             {'name': 'train', 'cameras': [scene.getTrainCameras()[idx % len(scene.getTrainCameras())] for idx in range(5, 30, 5)]})
 
-        _, background = render_args
-        white_bg = torch.all(background == 1).item()
+        bg_color = [1, 1, 1] if white else [0, 0, 0]
+        background = torch.tensor(bg_color, dtype=torch.float32, device="cuda")
 
         envmap = scene.cubemap.export_envmap(return_img=True).clamp(min=0.0).permute(2, 0, 1) # (3, H, W)
         if tb_writer:
@@ -79,20 +79,23 @@ def report_training(
                 psnr_test_pbr = 0.0
 
                 for idx, viewpoint in enumerate(config['cameras']):
-                    render_pkg = rgb_render(viewpoint, scene.gaussians, *render_args, True, True, True)
-                    pbr_pkg, _ = pbr_render(scene, viewpoint, canonical_rays, render_pkg, metallic, gamma)
+                    stem = viewpoint.image_name.rsplit('.', 1)[0]
+                    gt_image = torch.clamp(viewpoint.gt_image.to("cuda"), 0.0, 1.0)
+
+                    render_pkg = rgb_render(viewpoint, scene.gaussians, pipe, background, True, True, True)
+                    pbr_pkg = pbr_render(scene, viewpoint, canonical_rays, render_pkg, metallic, gamma)
 
                     image = torch.clamp(render_pkg["render"], 0.0, 1.0)
-                    gt_image = torch.clamp(viewpoint.gt_image.to("cuda"), 0.0, 1.0)
-                    stem = viewpoint.image_name.rsplit('.', 1)[0]
+                    alpha_map = render_pkg["alpha_map"] # (1, H, W)
+                    normal_mask = render_pkg["normal_mask"] # (1, H, W)
 
                     normal_map = convert_normal_for_save(render_pkg["normal_map"], viewpoint)
-                    sobel_map = convert_normal_for_save(render_pkg["sobel_normal_map"], viewpoint)
+                    sobel_map = convert_normal_for_save(render_pkg["sobel_map"], viewpoint)
                     depth_map = convert_depth_for_save(render_pkg["depth_map"])
 
                     albedo_map = render_pkg["albedo_map"].clamp(0.0, 1.0)
-                    roughness_map = render_pkg["roughness_map"]
-                    metallic_map = render_pkg["metallic_map"] if metallic else 1.0 - roughness_map
+                    roughness_map = pbr_pkg["roughness_map"]
+                    metallic_map = pbr_pkg["metallic_map"]
 
                     diffuse_map = linear_to_srgb(pbr_pkg["diffuse_rgb"]) if gamma else pbr_pkg["diffuse_rgb"]
                     diffuse_map = diffuse_map.clamp(0.0, 1.0).permute(2, 0, 1) # (3, H, W)
@@ -100,19 +103,23 @@ def report_training(
                     specular_map = specular_map.clamp(0.0, 1.0).permute(2, 0, 1) # (3, H, W)
                     pbr_image = pbr_pkg["render_rgb"].clamp(0.0, 1.0).permute(2, 0, 1) # (3, H, W)
 
-                    normal_mask = render_pkg["normal_mask"] # (1, H, W)
-                    alpha_map = render_pkg["alpha_map"] # (1, H, W)
+                    if white:
+                        alpha_mask = viewpoint.alpha_mask.cuda() > 0.5
+                        gt_image = torch.where(alpha_mask, gt_image, background[:, None, None])
 
-                    pbr_image = torch.where(normal_mask, pbr_image, background[:, None, None])
-                    diffuse_map = torch.where(normal_mask, diffuse_map, background[:, None, None])
-                    specular_map = torch.where(normal_mask, specular_map, background[:, None, None])
-                    albedo_map = torch.where(normal_mask, albedo_map, background[:, None, None])
-                    roughness_map = torch.where(normal_mask, roughness_map, background[:, None, None])
-                    metallic_map = torch.where(normal_mask, metallic_map, background[:, None, None])
+                        pbr_image = torch.where(alpha_mask, pbr_image, 1.0)
+                        diffuse_map = torch.where(alpha_mask, diffuse_map, 1.0)
+                        specular_map = torch.where(alpha_mask, specular_map, 1.0)
+                        albedo_map = torch.where(alpha_mask, albedo_map, 1.0)
+                        roughness_map = torch.where(alpha_mask, roughness_map, 1.0)
+                        metallic_map = torch.where(alpha_mask, metallic_map, 1.0)
 
-                    if white_bg:
                         normal_map = torch.where(normal_mask, normal_map, 1.0)
                         sobel_map = torch.where(normal_mask, sobel_map, 1.0)
+                    else:
+                        pbr_image = torch.where(normal_mask, pbr_image, background[:, None, None])
+                        diffuse_map = torch.where(normal_mask, diffuse_map, background[:, None, None])
+                        specular_map = torch.where(normal_mask, specular_map, background[:, None, None])
 
                     if tb_writer and (idx < 5):
                         if iteration == testing_iterations[0]:

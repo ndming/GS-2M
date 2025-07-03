@@ -59,9 +59,7 @@ def train(model, opt, pipe, test_iterations, save_iterations, checkpoint_iterati
         scene.cubemap.load_state_dict(cubemap_state)
         scene.light_optimizer.load_state_dict(light_optimizer_state)
 
-    bg_color = [1, 1, 1] if model.white_background else [0, 0, 0]
-    background = torch.tensor(bg_color, dtype=torch.float32, device="cuda")
-
+    background = torch.tensor([0, 0, 0], dtype=torch.float32, device="cuda")
     iter_start = torch.cuda.Event(enable_timing = True)
     iter_end   = torch.cuda.Event(enable_timing = True)
 
@@ -126,13 +124,13 @@ def train(model, opt, pipe, test_iterations, save_iterations, checkpoint_iterati
                 roughness_map = render_pkg["roughness_map"] # (1, H, W)
                 weight_map = 1.0 + 4.0 * (1.0 - roughness_map).clamp(0, 1).detach()
                 diffuse_ref = image.detach()
-                # Ldn = (weight_map * (render_pkg["sobel_normal_map"] - render_pkg["normal_map"]).abs().sum(dim=0)).mean()
+                # Ldn = (weight_map * (render_pkg["sobel_map"] - render_pkg["normal_map"]).abs().sum(dim=0)).mean()
                 # Ltv = laplacian_loss(render_pkg["normal_map"], smooth_map)
                 # Ltv_d = laplacian_loss(render_pkg["depth_map"], smooth_map)
                 # Ltv = Ltv_d + Ltv_n
             lambda_dn = opt.lambda_depth_normal
-            # Ldn = (render_pkg["sobel_normal_map"] - render_pkg["normal_map"]).abs().sum(dim=0).mean()
-            Ldn = depth_normal_loss(render_pkg["normal_map"], render_pkg["sobel_normal_map"], diffuse_ref, weight_map)
+            # Ldn = (render_pkg["sobel_map"] - render_pkg["normal_map"]).abs().sum(dim=0).mean()
+            Ldn = depth_normal_loss(render_pkg["normal_map"], render_pkg["sobel_map"], diffuse_ref, weight_map)
 
             # lambda_tv = opt.lambda_tv_normal
             # Ltv = weighted_tv_loss(gt_image, render_pkg["normal_map"], weight_map)
@@ -144,11 +142,12 @@ def train(model, opt, pipe, test_iterations, save_iterations, checkpoint_iterati
         Lmat = torch.tensor([0.0])
         if material_stage:
             # PBR rendering
-            pbr_pkg, metallic_map = pbr_render(scene, viewpoint_cam, canonical_rays, render_pkg, model.metallic, model.gamma)
+            pbr_pkg = pbr_render(scene, viewpoint_cam, canonical_rays, render_pkg, model.metallic, model.gamma)
 
             normal_mask = render_pkg["normal_mask"] # (1, H, W)
             albedo_map = render_pkg["albedo_map"] # (3, H, W)
-            roughness_map = render_pkg["roughness_map"] # (1, H, W)
+            roughness_map = pbr_pkg["roughness_map"] # (1, H, W)
+            metallic_map = pbr_pkg["metallic_map"] # (1, H, W)
 
             # Correct background color
             render_pbr = pbr_pkg["render_rgb"].permute(2, 0, 1) # (3, H, W)
@@ -206,7 +205,7 @@ def train(model, opt, pipe, test_iterations, save_iterations, checkpoint_iterati
             pbr_stats = iteration > opt.material_from_iter
             report_training(
                 tb_writer, iteration, Lrgb, Lgeo, Lmat, loss, iter_start.elapsed_time(iter_end), test_iterations,
-                scene, model.metallic, model.gamma, render, (pipe, background), pbr_stats, canonical_rays)
+                scene, model.metallic, model.gamma, render, pipe, model.white_background, pbr_stats, canonical_rays)
 
             if (iteration in save_iterations):
                 tqdm.write(f"[ITER {iteration:>5}] Saving Gaussians and lighting")

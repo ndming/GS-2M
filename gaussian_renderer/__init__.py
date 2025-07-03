@@ -122,7 +122,7 @@ def render(
         features=features)
 
     normal_map = buffer[2:5, ...] # (3, H, W)
-    normal_mask = (normal_map != 0).all(0, keepdim=True)
+    normal_mask = (normal_map != 0).all(0, keepdim=True).detach()
 
     # alpha_map = buffer[0:1, ...] # (1, H, W)
     # if pad_normal:
@@ -149,16 +149,17 @@ def render(
 
     if sobel_normal:
         depth_map = out["depth_map"].squeeze(0) # (H, W)
-        sobel_map = render_normal_from_depth_map(viewpoint_camera, depth_map)
-        sobel_map = torch.where(normal_mask, sobel_map, 0.0) # (3, H, W)
-        out["sobel_normal_map"] = sobel_map
+        sobel_map = render_normal_from_depth_map(viewpoint_camera, depth_map, bg_color, out["alpha_map"][0])
+        out["sobel_map"] = sobel_map # (3, H, W)
 
     return out
 
-def render_normal_from_depth_map(viewpoint_cam, depth):
+def render_normal_from_depth_map(viewpoint_cam, depth, bg_color, alpha_map):
     # depth: (H, W), bg_color: (3), alpha: (H, W)
     # normal_ref: (3, H, W)
     intrinsic, extrinsic = viewpoint_cam.get_calib_matrix_nerf()
     normal_ref = normal_from_depth_image(depth, intrinsic.to(depth.device), extrinsic.to(depth.device), view_space=True)
+    background = bg_color[None, None, ...]
+    normal_ref = normal_ref * alpha_map[..., None] + background * (1. - alpha_map[..., None])
     normal_ref = normal_ref.permute(2, 0, 1) # (3, H, W)
     return normal_ref

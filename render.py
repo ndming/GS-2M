@@ -89,7 +89,7 @@ def render_views(model, split, iteration, views, scene, pipeline, background, ar
         tsdf_depth = depth.clone()
         if args.filter_depth:
             view_dirs = F.normalize(view.get_rays(), p=2, dim=-1)
-            sobel_map = render_pkg["sobel_normal_map"].permute(1,2,0) # (H, W, 3)
+            sobel_map = render_pkg["sobel_map"].permute(1,2,0) # (H, W, 3)
             sobel_map = F.normalize(sobel_map, p=2, dim=-1) # (H, W, 3)
             dots = torch.sum(view_dirs * sobel_map, dim=-1) # (H, W)
             angles = torch.acos(dots.abs())

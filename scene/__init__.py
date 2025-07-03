@@ -27,7 +27,7 @@ from pbr import CubemapLight, get_brdf_lut
 from utils.graphics_utils import get_envmap_dirs
 from utils.system_utils import searchForMaxIteration
 from utils.camera_utils import cameraList_from_camInfos, camera_to_JSON
-from utils.image_utils import process_input_image, convert_background_color
+from utils.image_utils import process_input_image
 
 class Scene:
     gaussians : GaussianModel
@@ -56,12 +56,11 @@ class Scene:
 
         if os.path.exists(os.path.join(args.source_path, "sparse")):
             print("[>] Found sparse directory, assuming COLMAP dataset!")
-            params = (args.source_path, args.images, args.masks, args.depths, args.eval, args.white_background)
+            params = (args.source_path, args.images, args.masks, args.depths, args.eval)
             scene_info = sceneLoadTypeCallbacks["Colmap"](*params)
         elif os.path.exists(os.path.join(args.source_path, "transforms_train.json")):
             print("[>] Found transforms_train.json file, assuming Blender dataset!")
-            params = (args.source_path, args.white_background, args.depths, args.eval)
-            scene_info = sceneLoadTypeCallbacks["Blender"](*params)
+            scene_info = sceneLoadTypeCallbacks["Blender"](args.source_path, args.depths, args.eval)
         else:
             assert False, "Could not recognize scene type!"
 
@@ -133,7 +132,7 @@ class Scene:
         print(f"[>] Using NCC scale: {self.ncc_scale:.2f}")
 
         print("[>] Populating gray images")
-        self._populate_gray_images(model.mask_gt, model.white_background, resolution_scale)
+        self._populate_gray_images(model.mask_gt, resolution_scale)
 
         self.cubemap.train()
         param_groups = [
@@ -170,14 +169,12 @@ class Scene:
             for index in sorted_indices[:multi_view_num]:
                 cur_cam.nearest_indices.append(index)
 
-    def _populate_gray_images(self, mask_gt, white_bg, resolution_scale):
+    def _populate_gray_images(self, mask_gt, resolution_scale):
         for cam in self.train_cameras[resolution_scale]:
             rgb = cam.gt_image
             ncc_scale = self.ncc_scale
             if ncc_scale != 1.0:
-                pil_image = Image.open(cam.image_path)
-                bg_color = np.array([1, 1, 1]) if white_bg else np.array([0, 0, 0])
-                image = convert_background_color(pil_image, bg_color)
+                image = Image.open(cam.image_path)
                 pil_mask = None if cam.mask_path is None else Image.open(cam.mask_path).convert("L")
                 res = int(cam.image_width / ncc_scale), int(cam.image_height / ncc_scale)
                 rgb, _ = process_input_image(image, res, mask_gt, pil_mask) # (C, H, W)
