@@ -90,8 +90,7 @@ def train(model, opt, pipe, test_iterations, save_iterations, checkpoint_iterati
 
         # Render
         render_pkg = render(
-            viewpoint_cam, gaussians, pipe, background, geometry_stage, material_stage,
-            sobel_normal=geometry_stage, inference=False, pad_normal=False)
+            viewpoint_cam, gaussians, pipe, background, geometry_stage, material_stage, sobel_normal=geometry_stage)
         image, visibility_filter, radii = render_pkg["render"], render_pkg["visibility_filter"], render_pkg["radii"]
         gt_image = viewpoint_cam.gt_image.cuda()
 
@@ -100,8 +99,6 @@ def train(model, opt, pipe, test_iterations, save_iterations, checkpoint_iterati
         lambda_ssim = opt.lambda_ssim
         Lssim = 1.0 - fused_ssim(image.unsqueeze(0), gt_image.unsqueeze(0))
         Lrgb = (1.0 - lambda_ssim) * L1 + lambda_ssim * Lssim
-        # if not material_stage or Lssim >= 0.5:
-        #     Lrgb += (1.0 - lambda_ssim) * Lc
 
         # Planar and sparse losses
         Lplanar = planar_loss(visibility_filter, gaussians)
@@ -147,24 +144,23 @@ def train(model, opt, pipe, test_iterations, save_iterations, checkpoint_iterati
         Lmat = torch.tensor([0.0])
         if material_stage:
             # PBR rendering
-            pbr_pkg, metallic_map = pbr_render(
-                scene, viewpoint_cam, canonical_rays, render_pkg, background,
-                model.metallic, model.gamma)
+            pbr_pkg, metallic_map = pbr_render(scene, viewpoint_cam, canonical_rays, render_pkg, model.metallic, model.gamma)
 
             normal_mask = render_pkg["normal_mask"] # (1, H, W)
             albedo_map = render_pkg["albedo_map"] # (3, H, W)
             roughness_map = render_pkg["roughness_map"] # (1, H, W)
 
-            # PBR loss
+            # Correct background color
             render_pbr = pbr_pkg["render_rgb"].permute(2, 0, 1) # (3, H, W)
             render_pbr = torch.where(normal_mask, render_pbr, background[:, None, None])
+
+            # PBR loss
             Lssim = 1.0 - fused_ssim(render_pbr.unsqueeze(0), gt_image.unsqueeze(0))
             Lpbr = (1.0 - lambda_ssim) * l1_loss(render_pbr, gt_image) + lambda_ssim * Lssim
 
             # Smoothness loss
-            sm_maps = [albedo_map, roughness_map, metallic_map] if model.metallic else [albedo_map, roughness_map]
-            arm = torch.cat(sm_maps, dim=0)
-            lambda_tv_smooth = opt.lambda_tv_smooth
+            material_maps = [albedo_map, roughness_map, metallic_map] if model.metallic else [albedo_map, roughness_map]
+            arm = torch.cat(material_maps, dim=0)
             Lsm = masked_tv_loss(normal_mask, diffuse_ref, arm) if (normal_mask == 0).sum() > 0 else tv_loss(diffuse_ref, arm)
 
             # Environment light loss
@@ -183,6 +179,7 @@ def train(model, opt, pipe, test_iterations, save_iterations, checkpoint_iterati
             # Llm = luminance_loss(diffuse_map, diffuse_ref, normal_mask)
             # Llm = (diffuse_map - diffuse_ref).abs().mean()
 
+            lambda_tv_smooth = opt.lambda_tv_smooth
             Lmat = Lpbr + lambda_tv_smooth * Lsm # + lambda_luminance * Llm
             loss += Lmat
 

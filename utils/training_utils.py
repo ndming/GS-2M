@@ -80,7 +80,19 @@ def report_training(
 
                 for idx, viewpoint in enumerate(config['cameras']):
                     render_pkg = rgb_render(viewpoint, scene.gaussians, *render_args, True, True, True)
-                    pbr_pkg, _ = pbr_render(scene, viewpoint, canonical_rays, render_pkg, background, metallic, gamma)
+                    pbr_pkg, _ = pbr_render(scene, viewpoint, canonical_rays, render_pkg, metallic, gamma)
+
+                    image = torch.clamp(render_pkg["render"], 0.0, 1.0)
+                    gt_image = torch.clamp(viewpoint.gt_image.to("cuda"), 0.0, 1.0)
+                    stem = viewpoint.image_name.rsplit('.', 1)[0]
+
+                    normal_map = convert_normal_for_save(render_pkg["normal_map"], viewpoint)
+                    sobel_map = convert_normal_for_save(render_pkg["sobel_normal_map"], viewpoint)
+                    depth_map = convert_depth_for_save(render_pkg["depth_map"])
+
+                    albedo_map = render_pkg["albedo_map"].clamp(0.0, 1.0)
+                    roughness_map = render_pkg["roughness_map"]
+                    metallic_map = render_pkg["metallic_map"] if metallic else 1.0 - roughness_map
 
                     diffuse_map = linear_to_srgb(pbr_pkg["diffuse_rgb"]) if gamma else pbr_pkg["diffuse_rgb"]
                     diffuse_map = diffuse_map.clamp(0.0, 1.0).permute(2, 0, 1) # (3, H, W)
@@ -89,28 +101,33 @@ def report_training(
                     pbr_image = pbr_pkg["render_rgb"].clamp(0.0, 1.0).permute(2, 0, 1) # (3, H, W)
 
                     normal_mask = render_pkg["normal_mask"] # (1, H, W)
+                    alpha_map = render_pkg["alpha_map"] # (1, H, W)
+
                     pbr_image = torch.where(normal_mask, pbr_image, background[:, None, None])
                     diffuse_map = torch.where(normal_mask, diffuse_map, background[:, None, None])
                     specular_map = torch.where(normal_mask, specular_map, background[:, None, None])
+                    albedo_map = torch.where(normal_mask, albedo_map, background[:, None, None])
+                    roughness_map = torch.where(normal_mask, roughness_map, background[:, None, None])
+                    metallic_map = torch.where(normal_mask, metallic_map, background[:, None, None])
 
-                    image = torch.clamp(render_pkg["render"], 0.0, 1.0)
-                    gt_image = torch.clamp(viewpoint.gt_image.to("cuda"), 0.0, 1.0)
-                    stem = viewpoint.image_name.rsplit('.', 1)[0]
+                    if white_bg:
+                        normal_map = torch.where(normal_mask, normal_map, 1.0)
+                        sobel_map = torch.where(normal_mask, sobel_map, 1.0)
 
                     if tb_writer and (idx < 5):
-                        tb_writer.add_images(config['name'] + f"_{stem}/rgb_render", image[None], global_step=iteration)
                         if iteration == testing_iterations[0]:
                             tb_writer.add_images(config['name'] + f"_{stem}/ground_truth", gt_image[None], global_step=iteration)
 
-                        for key in render_pkg.keys():
-                            if 'map' in key and 'dn' not in key and 'distance' not in key:
-                                if 'normal' in key:
-                                    render_pkg[key] = convert_normal_for_save(render_pkg[key], viewpoint)
-                                if 'depth' in key:
-                                    render_pkg[key] = convert_depth_for_save(render_pkg[key])
-                                if 'metallic' in key and not metallic:
-                                    render_pkg[key] = torch.where(normal_mask, 1.0 - render_pkg["roughness_map"], background[:, None, None])
-                                tb_writer.add_images(config['name'] + f"_{stem}/{key}", render_pkg[key][None], global_step=iteration)
+                        tb_writer.add_images(config['name'] + f"_{stem}/rgb_render", image[None], global_step=iteration)
+                        tb_writer.add_images(config['name'] + f"_{stem}/alpha_map", alpha_map[None], global_step=iteration)
+
+                        tb_writer.add_images(config['name'] + f"_{stem}/normal_map", normal_map[None], global_step=iteration)
+                        tb_writer.add_images(config['name'] + f"_{stem}/sobel_map", sobel_map[None], global_step=iteration)
+                        tb_writer.add_images(config['name'] + f"_{stem}/depth_map", depth_map[None], global_step=iteration)
+
+                        tb_writer.add_images(config['name'] + f"_{stem}/albedo_map", albedo_map[None], global_step=iteration)
+                        tb_writer.add_images(config['name'] + f"_{stem}/roughness_map", roughness_map[None], global_step=iteration)
+                        tb_writer.add_images(config['name'] + f"_{stem}/metallic_map", metallic_map[None], global_step=iteration)
     
                         tb_writer.add_images(config['name'] + f"_{stem}/z_pbr_render", pbr_image[None], global_step=iteration)
                         tb_writer.add_images(config['name'] + f"_{stem}/z_shade_diffuse", diffuse_map[None], global_step=iteration)

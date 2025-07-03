@@ -129,24 +129,19 @@ def get_brdf_lut() -> torch.Tensor:
 
 
 def pbr_shading(
-    light: CubemapLight,
-    normals: torch.Tensor,  # [H, W, 3]
-    view_dirs: torch.Tensor,  # [H, W, 3]
-    albedo: torch.Tensor,  # [H, W, 3]
-    roughness: torch.Tensor,  # [H, W, 1]
-    mask: torch.Tensor,  # [H, W, 1]
-    tone: bool = False,
-    gamma: bool = False,
-    occlusion: Optional[torch.Tensor] = None,  # [H, W, 1]
-    irradiance: Optional[torch.Tensor] = None,  # [H, W, 1]
-    metallic: Optional[torch.Tensor] = None,
-    brdf_lut: Optional[torch.Tensor] = None,
-    white_background = False,
-) -> Dict:
+        light: CubemapLight,
+        normals: torch.Tensor, # (H, W, 3)
+        view_dirs: torch.Tensor, # (H, W, 3)
+        albedo: torch.Tensor, # (H, W, 3)
+        roughness: torch.Tensor, # (H, W, 1)
+        tone: bool = False,
+        gamma: bool = False,
+        occlusion: Optional[torch.Tensor] = None, # (H, W, 1)
+        irradiance: Optional[torch.Tensor] = None, # (H, W, 1)
+        metallic: Optional[torch.Tensor] = None,
+        brdf_lut: Optional[torch.Tensor] = None) -> Dict:
+    # Prepare
     H, W, _ = normals.shape
-    background = torch.ones_like(normals) if white_background else torch.zeros_like(normals)  # [H, W, 3]
-
-    # prepare
     normals = normals.reshape(1, H, W, 3)
     view_dirs = view_dirs.reshape(1, H, W, 3)
     albedo = albedo.reshape(1, H, W, 3)
@@ -154,59 +149,52 @@ def pbr_shading(
 
     results = {}
     # prepare
-    ref_dirs = (
-        2.0 * (normals * view_dirs).sum(-1, keepdims=True).clamp(min=0.0) * normals - view_dirs
-    )  # [1, H, W, 3]
+    ref_dirs = (2.0 * (normals * view_dirs).sum(-1, keepdims=True).clamp(min=0.0) * normals - view_dirs) # (1, H, W, 3)
 
     # Diffuse lookup
     diffuse_light = dr.texture(
-        light.diffuse[None, ...],  # [1, 6, 16, 16, 3]
-        normals.contiguous(),  # [1, H, W, 3]
+        light.diffuse[None, ...], # (1, 6, 16, 16, 3)
+        normals.contiguous(), # (1, H, W, 3)
         filter_mode="linear",
-        boundary_mode="cube",
-    )  # [1, H, W, 3]
+        boundary_mode="cube") # (1, H, W, 3)
 
     if occlusion is not None:
         diffuse_light = diffuse_light * occlusion[None] + (1 - occlusion[None]) * irradiance[None]
 
     results["diffuse_light"] = diffuse_light[0]
-    diffuse_rgb = diffuse_light * albedo  # [1, H, W, 3]
+    diffuse_rgb = diffuse_light * albedo # (1, H, W, 3)
 
-    # specular
-    NoV = saturate_dot(normals, view_dirs)  # [1, H, W, 1]
-    fg_uv = torch.cat((NoV, roughness), dim=-1)  # [1, H, W, 2]
+    # Specular
+    NoV = saturate_dot(normals, view_dirs) # (1, H, W, 1)
+    fg_uv = torch.cat((NoV, roughness), dim=-1) # (1, H, W, 2)
     fg_lookup = dr.texture(
-        brdf_lut,  # [1, 256, 256, 2]
-        fg_uv.contiguous(),  # [1, H, W, 2]
+        brdf_lut,  # (1, 256, 256, 2)
+        fg_uv.contiguous(), # (1, H, W, 2)
         filter_mode="linear",
-        boundary_mode="clamp",
-    )  # [1, H, W, 2]
+        boundary_mode="clamp") # (1, H, W, 2)
 
     # Roughness adjusted specular env lookup
-    miplevel = light.get_mip(roughness)  # [1, H, W, 1]
+    miplevel = light.get_mip(roughness) # (1, H, W, 1)
     spec = dr.texture(
-        light.specular[0][None, ...],  # [1, 6, env_res, env_res, 3]
-        ref_dirs.contiguous(),  # [1, H, W, 3]
+        light.specular[0][None, ...], # (1, 6, env_res, env_res, 3)
+        ref_dirs.contiguous(),  # (1, H, W, 3)
         mip=list(m[None, ...] for m in light.specular[1:]),
-        mip_level_bias=miplevel[..., 0],  # [1, H, W]
+        mip_level_bias=miplevel[..., 0],  # (1, H, W)
         filter_mode="linear-mipmap-linear",
-        boundary_mode="cube",
-    )  # [1, H, W, 3]
+        boundary_mode="cube") # (1, H, W, 3)
 
     # Compute aggregate lighting
     if metallic is None:
         F0 = torch.ones_like(albedo) * 0.04  # [1, H, W, 3]
     else:
         F0 = (1.0 - metallic) * 0.04 + albedo * metallic
-    reflectance = F0 * fg_lookup[..., 0:1] + fg_lookup[..., 1:2]  # [1, H, W, 3]
-    specular_rgb = spec * reflectance  # [1, H, W, 3]
+    reflectance = F0 * fg_lookup[..., 0:1] + fg_lookup[..., 1:2]  # (1, H, W, 3)
+    specular_rgb = spec * reflectance  # (1, H, W, 3)
 
-    render_rgb = diffuse_rgb + specular_rgb  # [1, H, W, 3]
-
-    render_rgb = render_rgb.squeeze()  # [H, W, 3]
+    render_rgb = diffuse_rgb + specular_rgb # (1, H, W, 3)
+    render_rgb = render_rgb.squeeze() # (H, W, 3)
 
     if tone:
-        # Tone Mapping
         render_rgb = aces_film(render_rgb)
     else:
         render_rgb = render_rgb.clamp(min=0.0, max=1.0)
@@ -214,13 +202,11 @@ def pbr_shading(
     if gamma:
         render_rgb = linear_to_srgb(render_rgb.squeeze())
 
-    render_rgb = torch.where(mask, render_rgb, background)
-
     results.update(
         {
-            "render_rgb": render_rgb,
-            "diffuse_rgb": diffuse_rgb.squeeze(),
-            "specular_rgb": specular_rgb.squeeze(),
+            "render_rgb": render_rgb, # (H, W, 3)
+            "diffuse_rgb": diffuse_rgb.squeeze(), # (H, W, 3)
+            "specular_rgb": specular_rgb.squeeze(), # (H, W, 3)
         }
     )
 

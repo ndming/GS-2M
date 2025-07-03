@@ -6,7 +6,7 @@ from .shade import get_brdf_lut, pbr_shading, saturate_dot, linear_to_srgb, srgb
 
 __all__ = ["CubemapLight", "get_brdf_lut", "pbr_shading", "saturate_dot", "linear_to_srgb", "srgb_to_linear"]
 
-def pbr_render(scene, viewpoint_cam, canonical_rays, render_pkg, bg_color, metallic, gamma=False):
+def pbr_render(scene, viewpoint_cam, canonical_rays, render_pkg, metallic, gamma=False):
     # Build mips for environment light
     scene.cubemap.build_mips()
     normal_mask = render_pkg["normal_mask"] # (1, H, W)
@@ -30,20 +30,18 @@ def pbr_render(scene, viewpoint_cam, canonical_rays, render_pkg, bg_color, metal
     # If not training metallic, estimate it from roughness
     if not metallic:
         metallic_map = (1.0 - roughness_map).clamp(0, 1).detach() # (1, H, W)
-        metallic_map = torch.where(normal_mask, metallic_map, bg_color[:, None, None])
+        metallic_map = torch.where(normal_mask, metallic_map, .0)
 
     pbr_pkg = pbr_shading(
         light=scene.cubemap,
         normals=normal_map.permute(1, 2, 0).detach(), # (H, W, 3)
         view_dirs=view_dirs,
-        mask=(viewpoint_cam.alpha_mask > 0.5).permute(1, 2, 0), # (H, W, 1)
         albedo=albedo_map.permute(1, 2, 0), # (H, W, 3)
         roughness=roughness_map.permute(1, 2, 0), # (H, W, 1)
         metallic=metallic_map.permute(1, 2, 0), # (H, W, 1)
         occlusion=torch.ones_like(roughness_map).permute(1, 2, 0),
         irradiance=torch.zeros_like(roughness_map).permute(1, 2, 0),
         brdf_lut=scene.brdf_lut,
-        gamma=gamma,
-        white_background=torch.all(bg_color == 1).item())
+        gamma=gamma)
     return pbr_pkg, metallic_map
 
