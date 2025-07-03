@@ -34,21 +34,22 @@ for scene in scenes:
     scene_time = time.time() - scene_start
     runtimes.append(scene_time)
 
-    # Rotate the mesh to align with GT point cloud
-    mesh_dir = Path(f"{out_base_path}/{scene}/train/{label}_30000/meshes")
-    mesh = o3d.io.read_triangle_mesh(str(mesh_dir / "tsdf_post.ply"))
-    theta = np.pi / 8
-    R = np.array([
-        [np.cos(theta), 0, np.sin(theta)],
-        [0, 1, 0],
-        [-np.sin(theta), 0, np.cos(theta)]])
-    mesh.rotate(R, center=(0, 0, 0))
-    o3d.io.write_triangle_mesh(str(mesh_dir / "tnt_adjusted.ply"), mesh)
+    if scene == "Truck":
+        # Rotate the mesh to align with GT point cloud
+        mesh_dir = Path(f"{out_base_path}/{scene}/train/{label}_30000/meshes")
+        mesh = o3d.io.read_triangle_mesh(str(mesh_dir / "tsdf_post.ply"))
+        theta = np.pi / 8
+        R = np.array([
+            [np.cos(theta), 0, np.sin(theta)],
+            [0, 1, 0],
+            [-np.sin(theta), 0, np.cos(theta)]])
+        mesh.rotate(R, center=(0, 0, 0))
+        o3d.io.write_triangle_mesh(str(mesh_dir / "tsdf_post.ply"), mesh)
 
     cmd = f"python scripts/eval_tnt/run.py " + \
           f"--dataset-dir {data_base_path}/{scene} " + \
           f"--traj-path {data_base_path}/{scene}/{scene}_COLMAP_SfM.log " + \
-          f"--ply-path {out_base_path}/{scene}/train/{label}_30000/meshes/tnt_adjusted.ply"
+          f"--ply-path {out_base_path}/{scene}/train/{label}_30000/meshes/tsdf_post.ply"
     print("[>] " + cmd)
     os.system(cmd)
     print(f"==> Done with scene: {scene} <===\n")
