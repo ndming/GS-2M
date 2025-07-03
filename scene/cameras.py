@@ -26,7 +26,6 @@ class Camera(torch.nn.Module):
         self.uid = uid
         self.R = R # transposed rotation in w2c (basically c2w rotation)
         self.T = T # translation in w2c
-        self.nearest_indices = [] # nearest neighbors indices for this camera, populated by Scene
         self.image_name = image_name # name with suffix
         self.image_width  = resolution[0]
         self.image_height = resolution[1]
@@ -66,6 +65,9 @@ class Camera(torch.nn.Module):
         self.projection_matrix = getProjectionMatrix(znear=self.znear, zfar=self.zfar, fovX=self.FoVx, fovY=self.FoVy).transpose(0, 1).cuda()
         self.full_proj_transform = (self.world_view_transform.unsqueeze(0).bmm(self.projection_matrix.unsqueeze(0))).squeeze(0)
         self.camera_center = self.world_view_transform.inverse()[3, :3]
+
+        self.nearest_indices = [] # nearest neighbors indices for this camera, populated by Scene
+        self.nearby_indices = [] # nearby neighbors for this camera, populated by Scene
 
     def get_rays(self, scale=1.0):
         h, w = int(self.image_height / scale), int(self.image_width / scale)

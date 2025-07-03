@@ -123,7 +123,7 @@ def train(model, opt, pipe, test_iterations, save_iterations, checkpoint_iterati
             if material_stage:
                 roughness_map = render_pkg["roughness_map"] # (1, H, W)
                 weight_map = 1.0 + 4.0 * (1.0 - roughness_map).clamp(0, 1).detach()
-                diffuse_ref = image.detach()
+                diffuse_ref = render_pkg["albedo_map"].detach()
                 # Ldn = (weight_map * (render_pkg["sobel_map"] - render_pkg["normal_map"]).abs().sum(dim=0)).mean()
                 # Ltv = laplacian_loss(render_pkg["normal_map"], smooth_map)
                 # Ltv_d = laplacian_loss(render_pkg["depth_map"], smooth_map)

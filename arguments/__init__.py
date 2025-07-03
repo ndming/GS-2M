@@ -113,7 +113,6 @@ class OptimizationParams(ParamGroup):
         self.multi_view_geo_weight = 0.03
         self.multi_view_ncc_scale = -1.0
         self.multi_view_max_angle = 30
-        self.multi_view_min_angle = 10
         self.multi_view_min_dist = 0.01
         self.multi_view_max_dist = 1.5
         self.use_multi_view_trim = True
@@ -131,7 +130,11 @@ class OptimizationParams(ParamGroup):
         self.mv_occlusion_threshold = 5e-4
         self.mv_pixel_weight_decay = 3.0
         self.lambda_multi_view = 1.0
-        self.lambda_luminance = 0.3
+        self.nearby_cam_num = 16
+        self.nearby_cam_max_angle = 60
+        self.nearby_cam_min_angle = 10
+        self.nearby_cam_min_dist = 0.05
+        self.nearby_cam_max_dist = 2.5
 
         super().__init__(parser, "Optimization Parameters")
 

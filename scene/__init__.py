@@ -120,8 +120,8 @@ class Scene:
         return self.test_cameras[scale]
 
     def training_setup(self, opt, model, resolution_scale=1.0):
-        print("[>] Populating camera neighbors")
-        self._populate_neareast_cameras(opt, resolution_scale)
+        print("[>] Populating neighbor cameras")
+        self._populate_neighbor_cameras(opt, resolution_scale)
 
         if opt.multi_view_ncc_scale > 0:
             self.ncc_scale = opt.multi_view_ncc_scale
@@ -140,7 +140,7 @@ class Scene:
         ]
         self.light_optimizer = torch.optim.Adam(param_groups, lr=opt.opacity_lr)
 
-    def _populate_neareast_cameras(self, opt, resolution_scale):
+    def _populate_neighbor_cameras(self, opt, resolution_scale):
         world_view_transforms = []
         camera_centers = []
         center_rays = []
@@ -161,13 +161,27 @@ class Scene:
 
         for id, cur_cam in enumerate(self.train_cameras[resolution_scale]):
             sorted_indices = np.lexsort((angles[id], distances[id]))
-            mask = (angles[id][sorted_indices] <= opt.multi_view_max_angle) & \
-                   (distances[id][sorted_indices] > opt.multi_view_min_dist) & \
-                   (distances[id][sorted_indices] < opt.multi_view_max_dist)
-            sorted_indices = sorted_indices[mask]
-            multi_view_num = min(opt.multi_view_num, len(sorted_indices))
-            for index in sorted_indices[:multi_view_num]:
+
+            # Nearest cameras
+            nearest_mask = (angles[id][sorted_indices] <= opt.multi_view_max_angle) & \
+                           (distances[id][sorted_indices] > opt.multi_view_min_dist) & \
+                           (distances[id][sorted_indices] < opt.multi_view_max_dist)
+            nearest_indices = sorted_indices[nearest_mask]
+            nearest_num = min(opt.multi_view_num, len(nearest_indices))
+            for index in nearest_indices[:nearest_num]:
                 cur_cam.nearest_indices.append(index)
+
+            # Nearby cameras
+            nearby_mask = (angles[id][sorted_indices] <= opt.nearby_cam_max_angle) & \
+                          (angles[id][sorted_indices] >= opt.nearby_cam_min_angle) & \
+                          (distances[id][sorted_indices] >= opt.nearby_cam_min_dist) & \
+                          (distances[id][sorted_indices] <= opt.nearby_cam_max_dist)
+            nearby_indices = sorted_indices[nearby_mask]
+            nearby_num = min(opt.nearby_cam_num, len(nearby_indices))
+            spaced_positions = np.round(np.linspace(0, len(nearby_indices) - 1, nearby_num)).astype(int)
+            selected_nearby_indices = nearby_indices[spaced_positions] if nearby_num > 0 else []
+            for index in selected_nearby_indices:
+                cur_cam.nearby_indices.append(index)
 
     def _populate_gray_images(self, mask_gt, resolution_scale):
         for cam in self.train_cameras[resolution_scale]:

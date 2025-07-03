@@ -132,8 +132,9 @@ def _get_img_grad_weight(img):
     return grad_img
 
 def multi_view_loss(scene, viewpoint_cam, opt, render_pkg, pipe, bg_color, material_stage):
+    train_cams = scene.getTrainCameras()
     nearest_indices = viewpoint_cam.nearest_indices
-    nearest_cam = None if len(nearest_indices) == 0 else scene.getTrainCameras()[random.sample(nearest_indices, 1)[0]]
+    nearest_cam = None if len(nearest_indices) == 0 else train_cams[random.sample(nearest_indices, 1)[0]]
     if nearest_cam is None:
         return 0.0
 
@@ -238,21 +239,50 @@ def multi_view_loss(scene, viewpoint_cam, opt, render_pkg, pipe, bg_color, mater
     ncc = ncc[ncc_mask].squeeze()
     ncc_loss = ncc.mean() if ncc_mask.sum() > 0 else 0.0
 
-    # if material_stage:
-    #     rough_map = render_pkg["roughness_map"] # (1, H, W)
-    #     h_map, w_map = rough_map.squeeze().shape
-    #     grid_map = pixels.reshape(-1, 1, 2).float()
-    #     grid_map = grid_map.clone()
-    #     grid_map[:, :, 0] = 2 * grid_map[:, :, 0] / (w_map - 1.0) - 1.0
-    #     grid_map[:, :, 1] = 2 * grid_map[:, :, 1] / (h_map - 1.0) - 1.0
-    #     rough_vals = F.grid_sample(rough_map.unsqueeze(1), grid_map.view(1, -1, 1, 2), align_corners=True)
-    #     rough_vals = rough_vals.squeeze() # (N,) valid_indices
-    #     smooth_mask =  ncc_mask
-    #     varied_mask = ~ncc_mask
-    #     if varied_mask.sum() > 0:
-    #         ncc_loss += 0.06 * rough_vals[varied_mask].mean()
-    #     if smooth_mask.sum() > 0:
-    #         ncc_loss -= 0.01 * rough_vals[smooth_mask].mean()
+    with torch.no_grad():
+        consistent_error = torch.zeros_like(weights) # (N,) valid_indices
+        nearby_indices = viewpoint_cam.nearby_indices
+
+        for cam_id in nearby_indices:
+            view = train_cams[cam_id]
+            gray = view.gray_image.cuda()
+            gray_vals = F.grid_sample(gray[None], grid.reshape(1, -1, 1, 2), align_corners=True)
+            gray_vals = gray_vals.reshape(-1, total_patch_size)
+            ncc_error, _ = _loss_ncc(ref_gray_val, gray_vals)
+            consistent_error += ncc_error.reshape(-1)
+
+        # if len(nearby_indices) > 0:
+        #     consistent_error /= len(nearby_indices)
+        consistent_error = consistent_error.detach()
+
+    if material_stage:
+        rough_map = render_pkg["roughness_map"] # (1, H, W)
+        h_map, w_map = rough_map.squeeze().shape
+        grid_map = pixels.reshape(-1, 1, 2).float()
+        grid_map = grid_map.clone()
+        grid_map[:, :, 0] = 2 * grid_map[:, :, 0] / (w_map - 1.0) - 1.0
+        grid_map[:, :, 1] = 2 * grid_map[:, :, 1] / (h_map - 1.0) - 1.0
+        rough_vals = F.grid_sample(rough_map.unsqueeze(1), grid_map.view(1, -1, 1, 2), align_corners=True)
+        rough_vals = rough_vals.squeeze() # (N,) valid_indices
+
+        consistent_threshold = 0.1
+        increase_mask = (consistent_error <  consistent_threshold) & (rough_vals <  1.000).detach()
+        decrease_mask = (consistent_error >= consistent_threshold) & (rough_vals >= 0.001).detach()
+
+        if increase_mask.sum() > 0:
+            ncc_loss -= 0.02 * rough_vals[increase_mask].mean()
+        if decrease_mask.sum() > 0:
+            ncc_loss += 0.08 * rough_vals[decrease_mask].mean()
+
+
+        # TODO: use ncc_error to penalize roughness
+
+        # smooth_mask =  ncc_mask
+        # varied_mask = ~ncc_mask
+        # if varied_mask.sum() > 0:
+        #     ncc_loss += 0.06 * rough_vals[varied_mask].mean()
+        # if smooth_mask.sum() > 0:
+        #     ncc_loss -= 0.01 * rough_vals[smooth_mask].mean()
 
         # rough_weights = (1.0 - rough_vals).clamp(0.0, 1.0).detach()
         # pixel_loss = 0.2 * (rough_weights * pixel_noise[valid_indices]).mean() if valid_indices.sum() > 0 else 0.0
