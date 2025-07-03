@@ -16,7 +16,7 @@ import torchvision
 
 import numpy as np
 import torch.nn.functional as F
-from pbr import pbr_shading
+from pbr import pbr_render
 
 from tqdm import tqdm
 from pathlib import Path
@@ -38,14 +38,12 @@ def render_views(model, split, iteration, views, scene, pipeline, background, ar
         return
 
     model_dir = Path(model.model_path)
-    rgb_render_dir = model_dir / split / f"{args.label}_{iteration}" / "rgb_renders"
-    pbr_render_dir = model_dir / split / f"{args.label}_{iteration}" / "pbr_renders"
+    render_dir = model_dir / split / f"{args.label}_{iteration}" / "renders"
     gt_dir     = model_dir / split / f"{args.label}_{iteration}" / "gts"
     normal_dir = model_dir / split / f"{args.label}_{iteration}" / "normals"
     depth_dir  = model_dir / split / f"{args.label}_{iteration}" / "depths"
 
-    os.makedirs(rgb_render_dir, exist_ok=True)
-    os.makedirs(pbr_render_dir, exist_ok=True)
+    os.makedirs(render_dir, exist_ok=True)
     os.makedirs(gt_dir, exist_ok=True)
     os.makedirs(normal_dir, exist_ok=True)
     os.makedirs(depth_dir, exist_ok=True)
@@ -74,11 +72,10 @@ def render_views(model, split, iteration, views, scene, pipeline, background, ar
             sobel_normal=args.filter_depth, inference=True, pad_normal=True)
         image_stem = view.image_name.rsplit('.', 1)[0]
 
-        # Render and GT
-        rgb_render = torch.clamp(render_pkg["render"], 0.0, 1.0)
+        # GT image
         gt_image = torch.clamp(view.gt_image[0:3, :, :], 0.0, 1.0)
-
-        torchvision.utils.save_image(rgb_render, rgb_render_dir / f"{image_stem}.png")
+        if model.white_background:
+            gt_image = torch.where(view.alpha_mask > 0.5, gt_image, background[:, None, None])
         torchvision.utils.save_image(gt_image, gt_dir / f"{image_stem}.png")
 
         # Normals
@@ -100,41 +97,16 @@ def render_views(model, split, iteration, views, scene, pipeline, background, ar
             tsdf_depth[remove] = 0.0
         fusion_depths.append(tsdf_depth.cpu())
 
-        # PBR rendering
-        H, W = view.image_height, view.image_width
-        c2w = view.world_view_transform[:3, :3]
-        view_dirs = -(F.normalize(canonical_rays, p=2, dim=-1) @ c2w.T).reshape(H, W, 3)
-
-        normals = render_pkg["normal_map"].permute(1, 2, 0).reshape(-1, 3) # (H * W, 3)
-        normals = normals @ c2w.T # (H * W, 3)
-        normal_map = normals.reshape(H, W, 3).permute(2, 0, 1) # (3, H, W)
-        normal_map = torch.where(
-            torch.norm(normal_map, dim=0, keepdim=True) > 0,
-            F.normalize(normal_map, dim=0, p=2), normal_map)
-
-        normal_mask = render_pkg["normal_mask"] # (1, H, W)
-
-        albedo_map = render_pkg["albedo_map"] # (3, H, W)
-        metallic_map = render_pkg["metallic_map"] # (1, H, W)
-        roughness_map = render_pkg["roughness_map"] # (1, H, W)
-
-        pbr_pkg = pbr_shading(
-            light=scene.cubemap,
-            normals=normal_map.permute(1, 2, 0), # (H, W, 3)
-            view_dirs=view_dirs,
-            mask=normal_mask.permute(1, 2, 0), # (H, W, 1)
-            albedo=albedo_map.permute(1, 2, 0), # (H, W, 3)
-            roughness=roughness_map.permute(1, 2, 0), # (H, W, 1)
-            metallic=metallic_map.permute(1, 2, 0) if model.metallic else None, # (H, W, 1)
-            occlusion=torch.ones_like(roughness_map).permute(1, 2, 0),
-            irradiance=torch.zeros_like(roughness_map).permute(1, 2, 0),
-            brdf_lut=scene.brdf_lut,
-            gamma=model.gamma,
-            white_background=model.white_background)
-
-        pbr_render = pbr_pkg["render_rgb"].clamp(0.0, 1.0).permute(2, 0, 1) # (3, H, W)
-        pbr_render = torch.where(normal_mask, pbr_render, background[:, None, None])
-        torchvision.utils.save_image(pbr_render, pbr_render_dir / f"{image_stem}.png")
+        if not model.material:
+            rgb_image = torch.clamp(render_pkg["render"], 0.0, 1.0)
+            torchvision.utils.save_image(rgb_image, render_dir / f"{image_stem}.png")
+        else:
+            pbr_pkg, _ = pbr_render(scene, view, canonical_rays, render_pkg, model.metallic, model.gamma)
+            pbr_image = pbr_pkg["render_rgb"].clamp(0.0, 1.0).permute(2, 0, 1) # (3, H, W)
+            pbr_mask = pbr_pkg["normal_mask"] if not model.mask_gt else view.alpha_mask.cuda() > 0.5
+            bg_color = 0.0 if model.mask_gt else background[:, None, None]
+            pbr_image = torch.where(pbr_mask, pbr_image, bg_color)
+            torchvision.utils.save_image(pbr_image, render_dir / f"{image_stem}.png")
 
     if args.extract_mesh:
         mesh_dir = model_dir / split / f"{args.label}_{iteration}" / "meshes"
@@ -153,8 +125,7 @@ def render_views(model, split, iteration, views, scene, pipeline, background, ar
             json.dump(config, f, indent=4)
 
         tsdf_depths = torch.stack(fusion_depths, dim=0) # (N, H, W)
-        tsdf_rgb_dir = rgb_render_dir if args.rgb_color else pbr_render_dir
-        volume = fuse_depths(tsdf_depths, views, tsdf_rgb_dir, max_depth, voxel_size, sdf_trunc, bounds)
+        volume = fuse_depths(tsdf_depths, views, render_dir, max_depth, voxel_size, sdf_trunc, bounds)
 
         # Raw mesh
         print(f"[>] Extracting mesh from TSDF volume...")
@@ -186,7 +157,6 @@ if __name__ == "__main__":
     parser.add_argument("--sdf_trunc", default=-1, type=float)
     parser.add_argument("--num_clusters", default=1, type=int)
     parser.add_argument("--filter_depth", action="store_true", help="Filter depth maps before TSDF fusion")
-    parser.add_argument("--rgb_color", action="store_true", help="Use RGB renderings for mesh colors, default to PBR")
     parser.add_argument("--dtu", action="store_true", help="Tailor the rendering for the DTU dataset")
     parser.add_argument("--tnt", action="store_true", help="Tailor the rendering for the TnT dataset")
     parser.add_argument("--blender", action="store_true", help="Tailor the rendering for Blender scenes")
@@ -251,9 +221,6 @@ if __name__ == "__main__":
         args.skip_test = False
         args.normal_world = True
         model.white_background = True
-
-    if not model.material:
-        args.rgb_color = True
 
     with torch.no_grad():
         gaussians = GaussianModel(model.sh_degree)

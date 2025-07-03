@@ -53,7 +53,7 @@ def fuse_depths(tsdf_depths, views, render_dir, max_depth, voxel_size, sdf_trunc
             mask = mask.reshape(h, w)
             ref_depth[mask] = 0
         else:
-            ref_depth[view.alpha_mask.squeeze() < 0.5] = 0
+            ref_depth[view.alpha_mask.cuda().squeeze() < 0.5] = 0
 
         ref_depth = ref_depth.cpu().numpy()
 

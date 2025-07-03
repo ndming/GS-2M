@@ -31,7 +31,7 @@ for scene in scenes:
     scene_time = time.time() - scene_start
     runtimes.append(scene_time)
 
-    common_args = f"--split train --method {label}_30000 --rgb_eval"
+    common_args = f"--split train --method {label}_30000"
     cmd = f"python metrics.py -m {out_base_path}/scan{scene} {common_args}"
     print("[>] " + cmd)
     os.system(cmd)

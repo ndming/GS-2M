@@ -35,14 +35,14 @@ def read_images(renders_dir, gt_dir):
         image_names.append(fname)
     return renders, gts, image_names
 
-def evaluate(model_path, split, method, rgb_eval):
+def evaluate(model_path, split, method):
     split_dir = Path(model_path) / split
     if not split_dir.exists():
         raise FileNotFoundError(f"Split directory {split_dir} does not exist, did you forget to specify --split?.")
 
     method_dir = split_dir / method
     gt_dir = method_dir/ "gts"
-    render_dir = method_dir / "rgb_renders" if rgb_eval else method_dir / "pbr_renders"
+    render_dir = method_dir / "renders"
     renders, gts, _ = read_images(render_dir, gt_dir)
 
     ssims = []
@@ -85,7 +85,6 @@ if __name__ == "__main__":
     parser.add_argument('--model_path', '-m', required=True, type=str)
     parser.add_argument('--split', type=str, default="test", help="Split to evaluate on (train/test)")
     parser.add_argument('--method', type=str, default="ours_30000")
-    parser.add_argument('--rgb_eval', action='store_true', help="Use RGB evaluation instead of PBR")
 
     args = parser.parse_args()
-    evaluate(args.model_path, args.split, args.method, args.rgb_eval)
+    evaluate(args.model_path, args.split, args.method)
