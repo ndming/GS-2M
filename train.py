@@ -87,8 +87,7 @@ def train(model, opt, pipe, test_iterations, save_iterations, checkpoint_iterati
 
         # Render
         render_pkg = render(
-            viewpoint_cam, gaussians, pipe, background, geometry_stage, material_stage,
-            sobel_normal=geometry_stage, inference=False, pad_normal=False)
+            viewpoint_cam, gaussians, pipe, background, geometry_stage, material_stage, sobel_normal=geometry_stage)
         image, visibility_filter, radii = render_pkg["render"], render_pkg["visibility_filter"], render_pkg["radii"]
         gt_image = viewpoint_cam.gt_image.cuda()
 
@@ -165,8 +164,9 @@ def train(model, opt, pipe, test_iterations, save_iterations, checkpoint_iterati
             # roughness_map = roughness_map * (rmax - rmin) + rmin
 
             if not model.metallic:
+                alpha_map = render_pkg["alpha_map"].detach() # (1, H, W)
                 metallic_map = (1.0 - render_pkg["roughness_map"]).clamp(0, 1).detach() # (1, H, W)
-                metallic_map = torch.where(normal_mask, metallic_map, background[:, None, None])
+                metallic_map = alpha_map * metallic_map # (1, H, W)
 
             pbr_pkg = pbr_shading(
                 light=scene.cubemap,

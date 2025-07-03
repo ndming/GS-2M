@@ -26,9 +26,7 @@ def render(
         bg_color: torch.Tensor,
         geometry_stage=False,
         material_stage=False,
-        sobel_normal=False,
-        inference=False,
-        pad_normal=False):
+        sobel_normal=False):
     """
     Render the scene.
 
@@ -126,12 +124,11 @@ def render(
     normal_map = buffer[2:5, ...] # (3, H, W)
     normal_mask = (normal_map != 0).all(0, keepdim=True)
 
-    alpha_map = buffer[0:1, ...] # (1, H, W)
-    if pad_normal:
-        alpha_map = torch.where(alpha_map < 0.004, torch.zeros_like(alpha_map), alpha_map)
-        alpha_map = torch.where(alpha_map > 1.0 - 0.004, torch.ones_like(alpha_map), alpha_map)
-        normal_bg = torch.tensor([0.0, 0.0, 0.0], device=normal_map.device)
-        normal_map = normal_map * alpha_map + (1.0 - alpha_map) * normal_bg[:, None, None]
+    # alpha_map = buffer[0:1, ...] # (1, H, W)
+    # alpha_map = torch.where(alpha_map < 0.004, torch.zeros_like(alpha_map), alpha_map)
+    # alpha_map = torch.where(alpha_map > 1.0 - 0.004, torch.ones_like(alpha_map), alpha_map)
+    # # normal_bg = torch.tensor([0.0, 0.0, 0.0], device=normal_map.device)
+    # normal_map = normal_map * alpha_map + (1.0 - alpha_map) * bg_color[:, None, None]
 
     out = {
         "render": rendered_image, # (3, H, W)

@@ -104,8 +104,9 @@ def report_training(
                     # rmax, rmin = 1.0, 0.001
                     # roughness_map = roughness_map * (rmax - rmin) + rmin
                     if not metallic:
+                        alpha_map = render_pkg["alpha_map"]
                         metallic_map = (1.0 - render_pkg["roughness_map"]).clamp(0, 1) # (1, H, W)
-                        metallic_map = torch.where(normal_mask, metallic_map, background[:, None, None])
+                        metallic_map = alpha_map * metallic_map
 
                     pbr_pkg = pbr_func(
                         light=scene.cubemap,
@@ -143,7 +144,8 @@ def report_training(
                                 if 'depth' in key:
                                     render_pkg[key] = convert_depth_for_save(render_pkg[key])
                                 if 'metallic' in key and not metallic:
-                                    render_pkg[key] = torch.where(normal_mask, 1.0 - render_pkg["roughness_map"], background[:, None, None])
+                                    metallic_map = (1.0 - render_pkg["roughness_map"]).clamp(0, 1)
+                                    render_pkg[key] = alpha_map * metallic_map
                                 tb_writer.add_images(config['name'] + f"_{stem}/{key}", render_pkg[key][None], global_step=iteration)
     
                         tb_writer.add_images(config['name'] + f"_{stem}/z_pbr_render", pbr_render[None], global_step=iteration)
