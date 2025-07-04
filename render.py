@@ -67,9 +67,7 @@ def render_views(model, split, iteration, views, scene, pipeline, background, ar
 
     fusion_depths = []
     for view in tqdm(views, desc="[>] Rendering", ncols=80):
-        render_pkg = render(
-            view, scene.gaussians, pipeline, background, material_stage=True,
-            sobel_normal=args.filter_depth, inference=True, pad_normal=True)
+        render_pkg = render(view, scene.gaussians, pipeline, background, material_stage=True, sobel_normal=args.filter_depth)
         image_stem = view.image_name.rsplit('.', 1)[0]
 
         # GT image
@@ -103,7 +101,7 @@ def render_views(model, split, iteration, views, scene, pipeline, background, ar
         else:
             pbr_pkg, _ = pbr_render(scene, view, canonical_rays, render_pkg, model.metallic, model.gamma)
             pbr_image = pbr_pkg["render_rgb"].clamp(0.0, 1.0).permute(2, 0, 1) # (3, H, W)
-            pbr_mask = pbr_pkg["normal_mask"] if not model.mask_gt else view.alpha_mask.cuda() > 0.5
+            pbr_mask = view.alpha_mask.cuda() > 0.5 if model.mask_gt or model.white_background else pbr_pkg["normal_mask"]
             bg_color = 0.0 if model.mask_gt else background[:, None, None]
             pbr_image = torch.where(pbr_mask, pbr_image, bg_color)
             torchvision.utils.save_image(pbr_image, render_dir / f"{image_stem}.png")
