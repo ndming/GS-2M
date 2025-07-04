@@ -235,27 +235,27 @@ def multi_view_loss(scene, viewpoint_cam, opt, render_pkg, pipe, bg_color, mater
 
     ncc, ncc_mask = _loss_ncc(ref_gray_val, sampled_gray_val)
     ncc_mask = ncc_mask.reshape(-1)
-    ncc = ncc.reshape(-1) * weights
-    ncc = ncc[ncc_mask].squeeze()
-    ncc_loss = ncc.mean() if ncc_mask.sum() > 0 else 0.0
-
-    with torch.no_grad():
-        consistent_error = torch.zeros_like(weights) # (N,) valid_indices
-        nearby_indices = viewpoint_cam.nearby_indices
-
-        for cam_id in nearby_indices:
-            view = train_cams[cam_id]
-            gray = view.gray_image.cuda()
-            gray_vals = F.grid_sample(gray[None], grid.reshape(1, -1, 1, 2), align_corners=True)
-            gray_vals = gray_vals.reshape(-1, total_patch_size)
-            ncc_error, _ = _loss_ncc(ref_gray_val, gray_vals)
-            consistent_error += ncc_error.reshape(-1)
-
-        # if len(nearby_indices) > 0:
-        #     consistent_error /= len(nearby_indices)
-        consistent_error = consistent_error.detach()
+    Lp = ncc.reshape(-1) * weights
+    Lp = Lp[ncc_mask].squeeze()
+    ncc_loss = Lp.mean() if ncc_mask.sum() > 0 else 0.0
 
     if material_stage:
+        # with torch.no_grad():
+        #     consistent_error = torch.zeros_like(weights) # (N,) valid_indices
+        #     nearby_indices = viewpoint_cam.nearby_indices
+
+        #     for cam_id in nearby_indices:
+        #         view = train_cams[cam_id]
+        #         gray = view.gray_image.cuda()
+        #         gray_vals = F.grid_sample(gray[None], grid.reshape(1, -1, 1, 2), align_corners=True)
+        #         gray_vals = gray_vals.reshape(-1, total_patch_size)
+        #         ncc_error, _ = _loss_ncc(ref_gray_val, gray_vals)
+        #         consistent_error += ncc_error.reshape(-1)
+
+        #     if len(nearby_indices) > 0:
+        #         consistent_error /= len(nearby_indices)
+        #     consistent_error = consistent_error.detach()
+
         rough_map = render_pkg["roughness_map"] # (1, H, W)
         h_map, w_map = rough_map.squeeze().shape
         grid_map = pixels.reshape(-1, 1, 2).float()
@@ -265,6 +265,7 @@ def multi_view_loss(scene, viewpoint_cam, opt, render_pkg, pipe, bg_color, mater
         rough_vals = F.grid_sample(rough_map.unsqueeze(1), grid_map.view(1, -1, 1, 2), align_corners=True)
         rough_vals = rough_vals.squeeze() # (N,) valid_indices
 
+        consistent_error = ncc.reshape(-1).detach()
         consistent_threshold = 0.1
         increase_mask = (consistent_error <  consistent_threshold) & (rough_vals <  1.000).detach()
         decrease_mask = (consistent_error >= consistent_threshold) & (rough_vals >= 0.001).detach()
@@ -272,10 +273,7 @@ def multi_view_loss(scene, viewpoint_cam, opt, render_pkg, pipe, bg_color, mater
         if increase_mask.sum() > 0:
             ncc_loss -= 0.02 * rough_vals[increase_mask].mean()
         if decrease_mask.sum() > 0:
-            ncc_loss += 0.08 * rough_vals[decrease_mask].mean()
-
-
-        # TODO: use ncc_error to penalize roughness
+            ncc_loss += 0.20 * rough_vals[decrease_mask].mean()
 
         # smooth_mask =  ncc_mask
         # varied_mask = ~ncc_mask

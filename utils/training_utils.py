@@ -2,8 +2,6 @@ import os
 import torch
 import uuid
 
-import torch.nn.functional as F
-import nvdiffrast.torch as dr
 from pbr import pbr_render, linear_to_srgb
 
 from argparse import Namespace
@@ -87,7 +85,6 @@ def report_training(
 
                     image = torch.clamp(render_pkg["render"], 0.0, 1.0)
                     alpha_map = render_pkg["alpha_map"] # (1, H, W)
-                    normal_mask = render_pkg["normal_mask"] # (1, H, W)
 
                     normal_map = convert_normal_for_save(render_pkg["normal_map"], viewpoint)
                     sobel_map = convert_normal_for_save(render_pkg["sobel_map"], viewpoint)
@@ -114,9 +111,11 @@ def report_training(
                         roughness_map = torch.where(alpha_mask, roughness_map, 1.0)
                         metallic_map = torch.where(alpha_mask, metallic_map, 1.0)
 
-                        normal_map = torch.where(normal_mask, normal_map, 1.0)
-                        sobel_map = torch.where(normal_mask, sobel_map, 1.0)
+                        normal_map = torch.where(alpha_mask, normal_map, 1.0)
+                        sobel_map = torch.where(alpha_mask, sobel_map, 1.0)
                     else:
+                        normal_mask = render_pkg["normal_mask"] # (1, H, W)
+
                         pbr_image = torch.where(normal_mask, pbr_image, background[:, None, None])
                         diffuse_map = torch.where(normal_mask, diffuse_map, background[:, None, None])
                         specular_map = torch.where(normal_mask, specular_map, background[:, None, None])
