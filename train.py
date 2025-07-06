@@ -123,8 +123,8 @@ def train(model, opt, pipe, test_iterations, save_iterations, checkpoint_iterati
             weight_map = None
             albedo_ref = gt_image
             if material_stage:
-                weight_map = render_pkg["alpha_map"] * (1.0 - render_pkg["roughness_map"]).clamp(0, 1)
-                weight_map = (2.0 + 4.0 * weight_map).detach() # (1, H, W)
+                weight_map = 2.0 + 4.0 * (1.0 - render_pkg["roughness_map"]).clamp(0, 1)
+                weight_map = (render_pkg["alpha_map"] * weight_map).detach() # (1, H, W)
                 albedo_ref = render_pkg["albedo_map"].detach() # (3, H, W)
                 # Ldn = (weight_map * (render_pkg["sobel_map"] - render_pkg["normal_map"]).abs().sum(dim=0)).mean()
                 # Ltv = laplacian_loss(render_pkg["normal_map"], smooth_map)
@@ -132,7 +132,9 @@ def train(model, opt, pipe, test_iterations, save_iterations, checkpoint_iterati
                 # Ltv = Ltv_d + Ltv_n
             lambda_dn = opt.lambda_depth_normal
             # Ldn = (render_pkg["sobel_map"] - render_pkg["normal_map"]).abs().sum(dim=0).mean()
-            Ldn = depth_normal_loss(render_pkg["normal_map"], render_pkg["sobel_map"], albedo_ref, weight_map)
+            Ldn = depth_normal_loss(
+                render_pkg["normal_map"], render_pkg["sobel_map"], gt_image=albedo_ref,
+                weight_map=weight_map if iteration <= opt.densify_until_iter else None)
 
             Lgeo = lambda_dn * Ldn + lambda_mv * Lmv # + lambda_tv * Ltv
             loss += Lgeo
@@ -144,7 +146,6 @@ def train(model, opt, pipe, test_iterations, save_iterations, checkpoint_iterati
             pbr_pkg = pbr_render(scene, viewpoint_cam, canonical_rays, render_pkg, model.metallic, model.gamma)
 
             normal_mask = render_pkg["normal_mask"] # (1, H, W)
-            albedo_map = render_pkg["albedo_map"] # (3, H, W)
             roughness_map = pbr_pkg["roughness_map"] # (1, H, W)
             metallic_map = pbr_pkg["metallic_map"] # (1, H, W)
 
@@ -157,17 +158,16 @@ def train(model, opt, pipe, test_iterations, save_iterations, checkpoint_iterati
             Lpbr = (1.0 - lambda_ssim) * l1_loss(render_pbr, gt_image) + lambda_ssim * Lssim
 
             # Smoothness loss
-            # arm = torch.cat([roughness_map, metallic_map] if model.metallic else [roughness_map], dim=0)
-            # Lsm = 0.0 # masked_tv_loss(normal_mask, diffuse_ref, arm) if (normal_mask == 0).sum() > 0 else tv_loss(diffuse_ref, arm)
             lambda_tv_smooth = opt.lambda_tv_smooth
-            Lsm = tv_loss(albedo_ref, torch.cat([roughness_map, metallic_map] if model.metallic else [roughness_map], dim=0))
+            arm = [roughness_map, metallic_map] if model.metallic else [roughness_map]
+            Lsm = tv_loss(albedo_ref, torch.cat(arm, dim=0))
 
             # Environment light loss
-            envmap = dr.texture(
-                scene.cubemap.base[None, ...], scene.envmap_dirs[None, ...].contiguous(),
-                filter_mode="linear", boundary_mode="cube")[0] # (H, W, 3)
-            target_energy = 2.0 if model.gamma else 0.8
-            Lenv = (envmap.mean() - target_energy) ** 2
+            # envmap = dr.texture(
+            #     scene.cubemap.base[None, ...], scene.envmap_dirs[None, ...].contiguous(),
+            #     filter_mode="linear", boundary_mode="cube")[0] # (H, W, 3)
+            # target_energy = 2.0 if model.gamma else 0.8
+            # Lenv = (envmap.mean() - target_energy) ** 2
             # tv_h1 = torch.pow(envmap[1:, :, :] - envmap[:-1, :, :], 2).mean()
             # tv_w1 = torch.pow(envmap[:, 1:, :] - envmap[:, :-1, :], 2).mean()
             # lambda_tv_envmap = opt.lambda_tv_envmap
@@ -183,10 +183,10 @@ def train(model, opt, pipe, test_iterations, save_iterations, checkpoint_iterati
             # blurred_roughness = F.avg_pool2d(roughness_map, kernel_size=3, stride=1, padding=1)
             # Lrough = (blurred_roughness - roughness_map).abs().mean()
 
-            lambda_tv = opt.lambda_tv_normal
+            lambda_tv = opt.lambda_tv_normal if iteration <= opt.densify_until_iter else 0.15
             Ltv = weighted_tv_loss(albedo_ref, render_pkg["normal_map"], weight_map)
-
-            Lmat = Lpbr + 2.0 * Lsm + 0.4 * Ltv # + lambda_tv_smooth * Lsm + lambda_luminance * Llm
+    
+            Lmat = Lpbr + lambda_tv_smooth * Lsm + lambda_tv * Ltv
             loss += Lmat
 
         loss.backward()
@@ -219,7 +219,7 @@ def train(model, opt, pipe, test_iterations, save_iterations, checkpoint_iterati
                 scene.save(iteration)
 
             # Densification
-            if iteration < opt.densify_until_iter:
+            if iteration <= opt.densify_until_iter:
                 # Keep track of max radii in image-space for pruning
                 mask = (render_pkg["observe"] > 0) & visibility_filter
                 gaussians.max_radii2D = torch.where(mask, torch.max(gaussians.max_radii2D, radii), gaussians.max_radii2D)
@@ -243,7 +243,7 @@ def train(model, opt, pipe, test_iterations, save_iterations, checkpoint_iterati
                 if prune_mask.sum() > 0:
                     gaussians.prune_points(prune_mask)
 
-            if iteration < opt.densify_until_iter:
+            if iteration <= opt.densify_until_iter:
                 if iteration % opt.opacity_reduce_interval == 0 and opt.use_opacity_reduce:
                     # Periodically reduce opacity to remove floaters
                     gaussians.reduce_opacity()

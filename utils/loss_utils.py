@@ -271,9 +271,9 @@ def multi_view_loss(scene, viewpoint_cam, opt, render_pkg, pipe, bg_color, mater
         decrease_mask = (consistent_error >= consistent_threshold) & (rough_vals >= 0.001).detach()
 
         if increase_mask.sum() > 0:
-            ncc_loss -= 0.02 * rough_vals[increase_mask].mean()
+            ncc_loss -= 2e-2 * rough_vals[increase_mask].mean()
         if decrease_mask.sum() > 0:
-            ncc_loss += 0.20 * rough_vals[decrease_mask].mean()
+            ncc_loss += 2e-1 * rough_vals[decrease_mask].mean()
 
         # smooth_mask =  ncc_mask
         # varied_mask = ~ncc_mask
