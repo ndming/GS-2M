@@ -118,3 +118,20 @@ def convert_normal_for_save(normal_map, viewpoint, world_space=False):
     normals = normals * 0.5 + 0.5 # [-1, 1] -> [0, 1]
     H, W = viewpoint.image_height, viewpoint.image_width
     return normals.reshape(H, W, 3).permute(2, 0, 1)
+
+
+def map_to_rgba(map, alpha):
+    tensor_map = (map * 255).byte()
+    alpha_map = (alpha * 255).byte()
+
+    tensor_np = tensor_map.cpu().numpy()
+    alpha_np = alpha_map.cpu().numpy()
+
+    if tensor_np.shape[0] == 3:
+        rgba_np = np.concatenate((tensor_np, alpha_np), axis=0)
+    else:
+        rgba_np = np.concatenate((tensor_np, tensor_np, tensor_np, alpha_np), axis=0)
+
+    rgba_np = np.transpose(rgba_np, (1, 2, 0))
+    image = Image.fromarray(rgba_np, 'RGBA')
+    return image

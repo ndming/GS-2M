@@ -123,8 +123,9 @@ def train(model, opt, pipe, test_iterations, save_iterations, checkpoint_iterati
             weight_map = None
             albedo_ref = gt_image
             if material_stage:
-                weight_map = 2.0 + 4.0 * (1.0 - render_pkg["roughness_map"]).clamp(0, 1)
-                weight_map = (render_pkg["alpha_map"] * weight_map).detach() # (1, H, W)
+                # weight_map = 2.0 + 4.0 * (1.0 - render_pkg["roughness_map"]).clamp(0, 1)
+                weight_map = (1.0 - render_pkg["roughness_map"]).clamp(0, 1) ** 2.5
+                weight_map = weight_map.detach() # (1, H, W)
                 albedo_ref = render_pkg["albedo_map"].detach() # (3, H, W)
                 # Ldn = (weight_map * (render_pkg["sobel_map"] - render_pkg["normal_map"]).abs().sum(dim=0)).mean()
                 # Ltv = laplacian_loss(render_pkg["normal_map"], smooth_map)
@@ -134,7 +135,7 @@ def train(model, opt, pipe, test_iterations, save_iterations, checkpoint_iterati
             # Ldn = (render_pkg["sobel_map"] - render_pkg["normal_map"]).abs().sum(dim=0).mean()
             Ldn = depth_normal_loss(
                 render_pkg["normal_map"], render_pkg["sobel_map"], gt_image=albedo_ref,
-                weight_map=weight_map if iteration <= opt.densify_until_iter else None)
+                weight_map=None if iteration <= opt.densify_until_iter else None)
 
             Lgeo = lambda_dn * Ldn + lambda_mv * Lmv # + lambda_tv * Ltv
             loss += Lgeo
@@ -183,7 +184,7 @@ def train(model, opt, pipe, test_iterations, save_iterations, checkpoint_iterati
             # blurred_roughness = F.avg_pool2d(roughness_map, kernel_size=3, stride=1, padding=1)
             # Lrough = (blurred_roughness - roughness_map).abs().mean()
 
-            lambda_tv = opt.lambda_tv_normal if iteration <= opt.densify_until_iter else 0.15
+            lambda_tv = opt.lambda_tv_normal # if iteration <= opt.densify_until_iter else 0.15
             Ltv = weighted_tv_loss(albedo_ref, render_pkg["normal_map"], weight_map)
     
             Lmat = Lpbr + lambda_tv_smooth * Lsm + lambda_tv * Ltv

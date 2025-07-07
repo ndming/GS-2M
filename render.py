@@ -16,7 +16,7 @@ import torchvision
 
 import numpy as np
 import torch.nn.functional as F
-from pbr import pbr_render
+from pbr import pbr_render, linear_to_srgb
 
 from tqdm import tqdm
 from pathlib import Path
@@ -116,9 +116,17 @@ def render_views(model, split, iteration, views, scene, pipeline, background, ar
             roughness_map = pbr_pkg["roughness_map"] # (1, H, W)
             metallic_map = pbr_pkg["metallic_map"] # (1, H, W)
 
+            # Component maps
+            diffuse_map = linear_to_srgb(pbr_pkg["diffuse_rgb"]) if model.gamma else pbr_pkg["diffuse_rgb"]
+            diffuse_map = diffuse_map.clamp(0.0, 1.0).permute(2, 0, 1) # (3, H, W)
+            specular_map = linear_to_srgb(pbr_pkg["specular_rgb"]) if model.gamma else pbr_pkg["specular_rgb"]
+            specular_map = specular_map.clamp(0.0, 1.0).permute(2, 0, 1) # (3, H, W)
+
             albedo_dir = model_dir / split / f"{args.label}_{iteration}" / "albedo"
             roughness_dir = model_dir / split / f"{args.label}_{iteration}" / "roughness"
             metallic_dir = model_dir / split / f"{args.label}_{iteration}" / "metallic"
+            diffuse_dir = model_dir / split / f"{args.label}_{iteration}" / "diffuse"
+            specular_dir = model_dir / split / f"{args.label}_{iteration}" / "specular"
 
             os.makedirs(albedo_dir, exist_ok=True)
             os.makedirs(roughness_dir, exist_ok=True)
@@ -128,10 +136,14 @@ def render_views(model, split, iteration, views, scene, pipeline, background, ar
                 map_to_rgba(albedo_map, view.alpha_mask).save(albedo_dir / f"{image_stem}.png")
                 map_to_rgba(roughness_map, view.alpha_mask).save(roughness_dir / f"{image_stem}.png")
                 map_to_rgba(metallic_map, view.alpha_mask).save(metallic_dir / f"{image_stem}.png")
+                map_to_rgba(diffuse_map, view.alpha_mask).save(diffuse_dir / f"{image_stem}.png")
+                map_to_rgba(specular_map, view.alpha_mask).save(specular_dir / f"{image_stem}.png")
             else:
                 torchvision.utils.save_image(albedo_map, albedo_dir / f"{image_stem}.png")
                 torchvision.utils.save_image(roughness_map, roughness_dir / f"{image_stem}.png")
                 torchvision.utils.save_image(metallic_map, metallic_dir / f"{image_stem}.png")
+                torchvision.utils.save_image(diffuse_map, diffuse_dir / f"{image_stem}.png")
+                torchvision.utils.save_image(specular_map, specular_dir / f"{image_stem}.png")
 
     if args.extract_mesh:
         mesh_dir = model_dir / split / f"{args.label}_{iteration}" / "mesh"
