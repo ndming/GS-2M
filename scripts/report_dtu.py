@@ -19,7 +19,7 @@ def calculate_average_chamfer(out_base_dir: Path, method: str, latex: bool):
             print(f"Error: {scene} does not exist.")
             continue
 
-        result_file = scene/ "train" / method / "meshes" / "results.json"
+        result_file = scene/ "train" / method / "mesh" / "results.json"
         if not result_file.exists():
             print(f"Error: {result_file} not found for scene {scene}.")
 
@@ -98,7 +98,7 @@ def format_points(points):
 
 if __name__ == "__main__":
     parser = ArgumentParser(description="Calculate average Chamfer metrics.")
-    parser.add_argument("--output_base_dir", "-d", type=str, defaul="output/dtu", help="Path to the model parent directory")
+    parser.add_argument("--output_base_dir", "-d", type=str, default="output/dtu", help="Path to the model parent directory")
     parser.add_argument("--method", "-m", type=str, default="ours_30000")
     parser.add_argument("--latex", action="store_true", help="Output results in lines separated by & for LaTeX table")
     args = parser.parse_args()

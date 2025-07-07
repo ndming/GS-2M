@@ -29,7 +29,7 @@ from gaussian_renderer import GaussianModel
 from gaussian_renderer import render
 
 from utils.general_utils import safe_state
-from utils.image_utils import convert_normal_for_save, save_depth_map
+from utils.image_utils import convert_normal_for_save, save_depth_map, map_to_rgba
 from utils.mesh_utils import fuse_depths, write_mesh, post_process_mesh
 
 def render_views(model, split, iteration, views, scene, pipeline, background, args, bounds=None):
@@ -38,10 +38,10 @@ def render_views(model, split, iteration, views, scene, pipeline, background, ar
         return
 
     model_dir = Path(model.model_path)
-    render_dir = model_dir / split / f"{args.label}_{iteration}" / "renders"
-    gt_dir     = model_dir / split / f"{args.label}_{iteration}" / "gts"
-    normal_dir = model_dir / split / f"{args.label}_{iteration}" / "normals"
-    depth_dir  = model_dir / split / f"{args.label}_{iteration}" / "depths"
+    render_dir = model_dir / split / f"{args.label}_{iteration}" / "render"
+    gt_dir     = model_dir / split / f"{args.label}_{iteration}" / "gt"
+    normal_dir = model_dir / split / f"{args.label}_{iteration}" / "normal"
+    depth_dir  = model_dir / split / f"{args.label}_{iteration}" / "depth"
 
     os.makedirs(render_dir, exist_ok=True)
     os.makedirs(gt_dir, exist_ok=True)
@@ -52,8 +52,9 @@ def render_views(model, split, iteration, views, scene, pipeline, background, ar
     canonical_rays = scene.get_canonical_rays()
 
     # Environment map
-    envmap = scene.cubemap.export_envmap(return_img=True).permute(2, 0, 1).clamp(0.0, 1.0) # (3, H, W)
-    torchvision.utils.save_image(envmap, model_dir / split / f"{args.label}_{iteration}" / "envmap.png")
+    if model.material:
+        envmap = scene.cubemap.export_envmap(return_img=True).permute(2, 0, 1).clamp(0.0, 1.0) # (3, H, W)
+        torchvision.utils.save_image(envmap, model_dir / split / f"{args.label}_{iteration}" / "envmap.png")
 
     # Save number of points
     points = {}
@@ -78,7 +79,10 @@ def render_views(model, split, iteration, views, scene, pipeline, background, ar
 
         # Normals
         normal = convert_normal_for_save(render_pkg["normal_map"], view, args.normal_world).cpu() # (3, H, W)
-        torchvision.utils.save_image(normal, normal_dir / f"{image_stem}.png")
+        if model.white_background:
+            map_to_rgba(normal, view.alpha_mask).save(normal_dir / f"{image_stem}.png")
+        else:
+            torchvision.utils.save_image(normal, normal_dir / f"{image_stem}.png")
 
         # Depth
         depth = render_pkg["depth_map"].squeeze() # (H, W)
@@ -99,15 +103,38 @@ def render_views(model, split, iteration, views, scene, pipeline, background, ar
             rgb_image = torch.clamp(render_pkg["render"], 0.0, 1.0)
             torchvision.utils.save_image(rgb_image, render_dir / f"{image_stem}.png")
         else:
-            pbr_pkg, _ = pbr_render(scene, view, canonical_rays, render_pkg, model.metallic, model.gamma)
+            # PBR render
+            pbr_pkg = pbr_render(scene, view, canonical_rays, render_pkg, model.metallic, model.gamma)
             pbr_image = pbr_pkg["render_rgb"].clamp(0.0, 1.0).permute(2, 0, 1) # (3, H, W)
             pbr_mask = view.alpha_mask.cuda() > 0.5 if model.mask_gt or model.white_background else pbr_pkg["normal_mask"]
             bg_color = 0.0 if model.mask_gt else background[:, None, None]
             pbr_image = torch.where(pbr_mask, pbr_image, bg_color)
             torchvision.utils.save_image(pbr_image, render_dir / f"{image_stem}.png")
 
+            # BRDF maps
+            albedo_map = render_pkg["albedo_map"].clamp(0.0, 1.0) # (3, H, W)
+            roughness_map = pbr_pkg["roughness_map"] # (1, H, W)
+            metallic_map = pbr_pkg["metallic_map"] # (1, H, W)
+
+            albedo_dir = model_dir / split / f"{args.label}_{iteration}" / "albedo"
+            roughness_dir = model_dir / split / f"{args.label}_{iteration}" / "roughness"
+            metallic_dir = model_dir / split / f"{args.label}_{iteration}" / "metallic"
+
+            os.makedirs(albedo_dir, exist_ok=True)
+            os.makedirs(roughness_dir, exist_ok=True)
+            os.makedirs(metallic_dir, exist_ok=True)
+
+            if model.white_background:
+                map_to_rgba(albedo_map, view.alpha_mask).save(albedo_dir / f"{image_stem}.png")
+                map_to_rgba(roughness_map, view.alpha_mask).save(roughness_dir / f"{image_stem}.png")
+                map_to_rgba(metallic_map, view.alpha_mask).save(metallic_dir / f"{image_stem}.png")
+            else:
+                torchvision.utils.save_image(albedo_map, albedo_dir / f"{image_stem}.png")
+                torchvision.utils.save_image(roughness_map, roughness_dir / f"{image_stem}.png")
+                torchvision.utils.save_image(metallic_map, metallic_dir / f"{image_stem}.png")
+
     if args.extract_mesh:
-        mesh_dir = model_dir / split / f"{args.label}_{iteration}" / "meshes"
+        mesh_dir = model_dir / split / f"{args.label}_{iteration}" / "mesh"
         os.makedirs(mesh_dir, exist_ok=True)
 
         max_depth = args.max_depth if args.max_depth > 0 else 2.0 * scene.cameras_extent
@@ -218,7 +245,6 @@ if __name__ == "__main__":
         args.skip_train = True
         args.skip_test = False
         args.normal_world = True
-        model.white_background = True
 
     with torch.no_grad():
         gaussians = GaussianModel(model.sh_degree)

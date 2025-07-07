@@ -249,7 +249,7 @@ if __name__ == "__main__":
 
     model_dir = Path(args.model).resolve()
     loaded_iter = search_for_max_iter(str(model_dir / "point_cloud")) if args.iteration == -1 else args.iteration
-    ply_file = model_dir / "train" / f"{args.label}_{loaded_iter}" / "meshes" / f"tsdf_{args.label_mesh}.ply"
+    ply_file = model_dir / "train" / f"{args.label}_{loaded_iter}" / "mesh" / f"tsdf_{args.label_mesh}.ply"
     scanID = int(model_dir.name[4:])
 
     out_dir = model_dir / "train" / f"{args.label}_{loaded_iter}" / "visuals"

@@ -37,7 +37,7 @@ for scene in scenes:
     os.system(cmd)
 
     cmd = f"python scripts/eval_dtu/evaluate_single_scene.py " + \
-          f"--input_ply {out_base_path}/scan{scene}/train/{label}_30000/meshes/tsdf_post.ply " + \
+          f"--input_ply {out_base_path}/scan{scene}/train/{label}_30000/mesh/tsdf_post.ply " + \
           f"--ref_dir {data_base_path}/scan{scene} " + \
           f"--dtu_dir {data_base_path}/Official_DTU_Dataset"
     print("[>] " + cmd)
@@ -72,7 +72,7 @@ for scene in scenes:
     os.system(cmd)
 
     cmd = f"python scripts/eval_dtu/evaluate_single_scene.py " + \
-          f"--input_ply {out_base_path}/scan{scene}/train/{label}_30000/meshes/tsdf_post.ply " + \
+          f"--input_ply {out_base_path}/scan{scene}/train/{label}_30000/mesh/tsdf_post.ply " + \
           f"--ref_dir {data_base_path}/scan{scene} " + \
           f"--dtu_dir {data_base_path}/Official_DTU_Dataset"
     print("[>] " + cmd)
