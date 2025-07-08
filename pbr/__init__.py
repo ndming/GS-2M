@@ -24,8 +24,8 @@ def pbr_render(scene, viewpoint_cam, canonical_rays, render_pkg, metallic, gamma
     albedo_map = render_pkg["albedo_map"] # (3, H, W)
     metallic_map = render_pkg["metallic_map"] # (1, H, W)
     roughness_map = render_pkg["roughness_map"] # (1, H, W)
-    # rmax, rmin = 1.0, 0.001
-    # roughness_map = roughness_map * (rmax - rmin) + rmin
+    rmax, rmin = 1.0, 0.01
+    roughness_map = roughness_map * (rmax - rmin) + rmin
 
     # If not training metallic, estimate it from roughness
     if not metallic:

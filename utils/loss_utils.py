@@ -131,7 +131,93 @@ def _get_img_grad_weight(img):
     grad_img = torch.nn.functional.pad(grad_img[None, None], (1, 1, 1, 1), mode='constant', value=0.0).squeeze()
     return grad_img
 
-def multi_view_loss(scene, viewpoint_cam, opt, render_pkg, pipe, bg_color, material_stage):
+def roughness_loss(scene, viewpoint_cam, opt, render_pkg, pipe, bg_color):
+    nearby_indices = viewpoint_cam.nearby_indices
+    nearby_cam = None if len(nearby_indices) == 0 else scene.getTrainCameras()[random.sample(nearby_indices, 1)[0]]
+    if nearby_cam is None:
+        return 0.0
+    
+    with torch.no_grad():
+        H, W = render_pkg['depth_map'].squeeze().shape
+        ix, iy = torch.meshgrid(torch.arange(W), torch.arange(H), indexing='xy')
+        pixels = torch.stack([ix, iy], dim=-1).float().to(render_pkg['depth_map'].device)
+        pts = _get_points_from_depth(viewpoint_cam, render_pkg['depth_map'])
+
+        nearby_render_pkg = render(
+            nearby_cam, scene.gaussians, pipe, bg_color, geometry_stage=True, material_stage=False, sobel_normal=False)
+        pts_in_nearby_cam = pts @ nearby_cam.world_view_transform[:3, :3] + nearby_cam.world_view_transform[3, :3]
+        map_z, _, valid = _sample_depth_normal(pts_in_nearby_cam, nearby_cam, nearby_render_pkg)
+        valid = valid & (pts_in_nearby_cam[:, 2] - map_z <= opt.mv_occlusion_threshold)
+
+        ncc_scale = scene.ncc_scale
+        mask = valid.reshape(-1)
+        valid_indices = torch.arange(mask.shape[0], device=mask.device)[mask]
+        if mask.sum() > opt.multi_view_sample_num:
+            index = np.random.choice(mask.sum().cpu().numpy(), opt.multi_view_sample_num, replace=False)
+            valid_indices = valid_indices[index]
+
+        if valid_indices.sum() == 0:
+            return 0.0
+
+        pixels = pixels.reshape(-1,2)[valid_indices]
+        offsets = _patch_offsets(opt.multi_view_patch_size, pixels.device)
+        ori_pixels_patch = pixels.reshape(-1, 1, 2) / ncc_scale + offsets.float()
+
+        gt_image_gray = viewpoint_cam.gray_image.cuda() # (1, H, W)
+        h, w = gt_image_gray.squeeze().shape
+        pixels_patch = ori_pixels_patch.clone()
+        pixels_patch[:, :, 0] = 2 * pixels_patch[:, :, 0] / (w - 1) - 1.0
+        pixels_patch[:, :, 1] = 2 * pixels_patch[:, :, 1] / (h - 1) - 1.0
+        ref_gray_val = F.grid_sample(gt_image_gray.unsqueeze(1), pixels_patch.view(1, -1, 1, 2), align_corners=True)
+        total_patch_size = (opt.multi_view_patch_size * 2 + 1) ** 2
+        ref_gray_val = ref_gray_val.reshape(-1, total_patch_size)
+
+        rn_R = nearby_cam.world_view_transform[:3, :3].transpose(-1, -2) @ viewpoint_cam.world_view_transform[:3, :3]
+        rn_t = -rn_R @ viewpoint_cam.world_view_transform[3, :3] + nearby_cam.world_view_transform[3, :3]
+    
+        ref_local_n = render_pkg["normal_map"].permute(1, 2, 0) # (H, W, 3)
+        ref_local_n = ref_local_n.reshape(-1, 3)[valid_indices] # (N, 3)
+        ref_local_d = render_pkg["distance_map"].squeeze() # (H, W)
+        ref_local_d = ref_local_d.reshape(-1)[valid_indices] # (N,)
+
+        H_rn = rn_R[None] - torch.matmul(
+            rn_t[None, :, None].expand(ref_local_d.shape[0], 3, 1),
+            ref_local_n[:, :, None].expand(ref_local_d.shape[0], 3, 1).permute(0, 2, 1)) / ref_local_d[..., None, None]
+        H_rn = torch.matmul(nearby_cam.get_K(ncc_scale)[None].expand(ref_local_d.shape[0], 3, 3), H_rn)
+        H_rn = H_rn @ viewpoint_cam.get_inv_K(ncc_scale)
+
+        grid = _patch_warp(H_rn.reshape(-1, 3, 3), ori_pixels_patch)
+        grid[:, :, 0] = 2 * grid[:, :, 0] / (w - 1) - 1.0
+        grid[:, :, 1] = 2 * grid[:, :, 1] / (h - 1) - 1.0
+        nearest_image_gray = nearby_cam.gray_image.cuda()
+        sampled_gray_val = F.grid_sample(nearest_image_gray[None], grid.reshape(1, -1, 1, 2), align_corners=True)
+        sampled_gray_val = sampled_gray_val.reshape(-1, total_patch_size)
+
+        ncc, _ = _loss_ncc(ref_gray_val, sampled_gray_val)
+        ncc_error = ncc.reshape(-1).detach().pow(0.5) # (N,) valid_indices
+
+    rough_map = render_pkg["roughness_map"] # (1, H, W)
+    h_map, w_map = rough_map.squeeze().shape
+    grid_map = pixels.reshape(-1, 1, 2).float()
+    grid_map = grid_map.clone()
+    grid_map[:, :, 0] = 2 * grid_map[:, :, 0] / (w_map - 1.0) - 1.0
+    grid_map[:, :, 1] = 2 * grid_map[:, :, 1] / (h_map - 1.0) - 1.0
+    rough_vals = F.grid_sample(rough_map.unsqueeze(1), grid_map.view(1, -1, 1, 2), align_corners=True)
+    rough_vals = rough_vals.squeeze() # (N,) valid_indices
+
+    # consistent_error = ncc_error.detach().pow(0.5)
+    reflection_threshold = opt.reflection_threshold
+    increase_mask = (ncc_error <  reflection_threshold) & (rough_vals <  1.00).detach()
+    decrease_mask = (ncc_error >= reflection_threshold) & (rough_vals >= 0.01).detach()
+
+    rough_loss = 0.0
+    if increase_mask.sum() > 0:
+        rough_loss -= 2e-2 * rough_vals[increase_mask].mean()
+    if decrease_mask.sum() > 0:
+        rough_loss += 2e-1 * rough_vals[decrease_mask].mean()
+    return rough_loss
+
+def multi_view_loss(scene, viewpoint_cam, opt, render_pkg, pipe, bg_color):
     train_cams = scene.getTrainCameras()
     nearest_indices = viewpoint_cam.nearest_indices
     nearest_cam = None if len(nearest_indices) == 0 else train_cams[random.sample(nearest_indices, 1)[0]]
@@ -239,7 +325,7 @@ def multi_view_loss(scene, viewpoint_cam, opt, render_pkg, pipe, bg_color, mater
     Lp = Lp[ncc_mask].squeeze()
     ncc_loss = Lp.mean() if ncc_mask.sum() > 0 else 0.0
 
-    if material_stage:
+    # if material_stage:
         # with torch.no_grad():
         #     consistent_error = torch.zeros_like(weights) # (N,) valid_indices
         #     nearby_indices = viewpoint_cam.nearby_indices
@@ -256,24 +342,24 @@ def multi_view_loss(scene, viewpoint_cam, opt, render_pkg, pipe, bg_color, mater
         #         consistent_error /= len(nearby_indices)
         #     consistent_error = consistent_error.detach()
 
-        rough_map = render_pkg["roughness_map"] # (1, H, W)
-        h_map, w_map = rough_map.squeeze().shape
-        grid_map = pixels.reshape(-1, 1, 2).float()
-        grid_map = grid_map.clone()
-        grid_map[:, :, 0] = 2 * grid_map[:, :, 0] / (w_map - 1.0) - 1.0
-        grid_map[:, :, 1] = 2 * grid_map[:, :, 1] / (h_map - 1.0) - 1.0
-        rough_vals = F.grid_sample(rough_map.unsqueeze(1), grid_map.view(1, -1, 1, 2), align_corners=True)
-        rough_vals = rough_vals.squeeze() # (N,) valid_indices
+        # rough_map = render_pkg["roughness_map"] # (1, H, W)
+        # h_map, w_map = rough_map.squeeze().shape
+        # grid_map = pixels.reshape(-1, 1, 2).float()
+        # grid_map = grid_map.clone()
+        # grid_map[:, :, 0] = 2 * grid_map[:, :, 0] / (w_map - 1.0) - 1.0
+        # grid_map[:, :, 1] = 2 * grid_map[:, :, 1] / (h_map - 1.0) - 1.0
+        # rough_vals = F.grid_sample(rough_map.unsqueeze(1), grid_map.view(1, -1, 1, 2), align_corners=True)
+        # rough_vals = rough_vals.squeeze() # (N,) valid_indices
 
-        consistent_error = ncc.reshape(-1).detach().pow(0.5)
-        consistent_threshold = 0.25
-        increase_mask = (consistent_error <  consistent_threshold) & (rough_vals <  1.000).detach()
-        decrease_mask = (consistent_error >= consistent_threshold) & (rough_vals >= 0.001).detach()
+        # consistent_error = ncc.reshape(-1).detach().pow(0.5)
+        # reflection_threshold = opt.reflection_threshold
+        # increase_mask = (consistent_error <  reflection_threshold) & (rough_vals <  1.00).detach()
+        # decrease_mask = (consistent_error >= reflection_threshold) & (rough_vals >= 0.01).detach()
 
-        if increase_mask.sum() > 0:
-            ncc_loss -= 2e-2 * rough_vals[increase_mask].mean()
-        if decrease_mask.sum() > 0:
-            ncc_loss += 2e-1 * rough_vals[decrease_mask].mean()
+        # if increase_mask.sum() > 0:
+        #     ncc_loss -= 2e-2 * rough_vals[increase_mask].mean()
+        # if decrease_mask.sum() > 0:
+        #     ncc_loss += 2e-1 * rough_vals[decrease_mask].mean()
 
         # smooth_mask =  ncc_mask
         # varied_mask = ~ncc_mask
