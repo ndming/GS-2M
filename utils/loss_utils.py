@@ -265,8 +265,8 @@ def multi_view_loss(scene, viewpoint_cam, opt, render_pkg, pipe, bg_color, mater
         rough_vals = F.grid_sample(rough_map.unsqueeze(1), grid_map.view(1, -1, 1, 2), align_corners=True)
         rough_vals = rough_vals.squeeze() # (N,) valid_indices
 
-        consistent_error = ncc.reshape(-1).detach()
-        consistent_threshold = 0.1
+        consistent_error = ncc.reshape(-1).detach().pow(0.5)
+        consistent_threshold = 0.25
         increase_mask = (consistent_error <  consistent_threshold) & (rough_vals <  1.000).detach()
         decrease_mask = (consistent_error >= consistent_threshold) & (rough_vals >= 0.001).detach()
 

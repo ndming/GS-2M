@@ -159,20 +159,20 @@ def train(model, opt, pipe, test_iterations, save_iterations, checkpoint_iterati
             Lpbr = (1.0 - lambda_ssim) * l1_loss(render_pbr, gt_image) + lambda_ssim * Lssim
 
             # Smoothness loss
-            lambda_tv_smooth = opt.lambda_tv_smooth
+            lambda_smooth = opt.lambda_smooth
             arm = [roughness_map, metallic_map] if model.metallic else [roughness_map]
             Lsm = tv_loss(albedo_ref, torch.cat(arm, dim=0))
 
             # Environment light loss
-            # envmap = dr.texture(
-            #     scene.cubemap.base[None, ...], scene.envmap_dirs[None, ...].contiguous(),
-            #     filter_mode="linear", boundary_mode="cube")[0] # (H, W, 3)
+            envmap = dr.texture(
+                scene.cubemap.base[None, ...], scene.envmap_dirs[None, ...].contiguous(),
+                filter_mode="linear", boundary_mode="cube")[0] # (H, W, 3)
             # target_energy = 2.0 if model.gamma else 0.8
             # Lenv = (envmap.mean() - target_energy) ** 2
-            # tv_h1 = torch.pow(envmap[1:, :, :] - envmap[:-1, :, :], 2).mean()
-            # tv_w1 = torch.pow(envmap[:, 1:, :] - envmap[:, :-1, :], 2).mean()
-            # lambda_tv_envmap = opt.lambda_tv_envmap
-            # Lenv = tv_h1 + tv_w1
+            tv_h1 = torch.pow(envmap[1:, :, :] - envmap[:-1, :, :], 2).mean()
+            tv_w1 = torch.pow(envmap[:, 1:, :] - envmap[:, :-1, :], 2).mean()
+            lambda_envmap = opt.lambda_envmap
+            Lenv = tv_h1 + tv_w1
 
             # Luminance loss
             # diffuse_map = linear_to_srgb(pbr_pkg["diffuse_rgb"]).clamp(0, 1).permute(2, 0, 1) # (3, H, W)
@@ -187,7 +187,7 @@ def train(model, opt, pipe, test_iterations, save_iterations, checkpoint_iterati
             lambda_tv = opt.lambda_tv_normal # if iteration <= opt.densify_until_iter else 0.15
             Ltv = weighted_tv_loss(albedo_ref, render_pkg["normal_map"], weight_map)
     
-            Lmat = Lpbr + lambda_tv_smooth * Lsm + lambda_tv * Ltv
+            Lmat = Lpbr + lambda_smooth * Lsm + lambda_tv * Ltv + lambda_envmap * Lenv
             loss += Lmat
 
         loss.backward()
