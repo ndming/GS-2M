@@ -194,7 +194,8 @@ def roughness_loss(scene, viewpoint_cam, opt, render_pkg, pipe, bg_color):
         sampled_gray_val = sampled_gray_val.reshape(-1, total_patch_size)
 
         ncc, _ = _loss_ncc(ref_gray_val, sampled_gray_val)
-        ncc_error = ncc.reshape(-1).detach().pow(0.5) # (N,) valid_indices
+        ncc_error = ncc.reshape(-1).detach() # (N,) valid_indices
+        ncc_error = (1.0 - _sigmoid(ncc_error, 4, 0.4)) * ncc_error.sqrt() + _sigmoid(ncc_error, 4, 0.4) * (ncc_error ** 2.5)
 
     rough_map = render_pkg["roughness_map"] # (1, H, W)
     h_map, w_map = rough_map.squeeze().shape
@@ -212,10 +213,13 @@ def roughness_loss(scene, viewpoint_cam, opt, render_pkg, pipe, bg_color):
 
     rough_loss = 0.0
     if increase_mask.sum() > 0:
-        rough_loss -= 2e-2 * rough_vals[increase_mask].mean()
+        rough_loss -= 0.02 * rough_vals[increase_mask].mean()
     if decrease_mask.sum() > 0:
-        rough_loss += 2e-1 * rough_vals[decrease_mask].mean()
+        rough_loss += 0.08 * rough_vals[decrease_mask].mean()
     return rough_loss
+
+def _sigmoid(x, k, t):
+    return 1.0 / (1.0 + torch.exp(-k * (x - t)))
 
 def multi_view_loss(scene, viewpoint_cam, opt, render_pkg, pipe, bg_color):
     train_cams = scene.getTrainCameras()

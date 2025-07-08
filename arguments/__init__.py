@@ -121,7 +121,7 @@ class OptimizationParams(ParamGroup):
         # GS-IR/GS-ROR
         self.lambda_tv_normal = 2.0
         self.lambda_smooth = 2.0
-        self.lambda_envmap = 0.01
+        self.lambda_roughness = 0.3
         # Ours
         self.geometry_from_iter = 5000
         self.material_from_iter = 30_000

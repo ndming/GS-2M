@@ -186,9 +186,10 @@ def train(model, opt, pipe, test_iterations, save_iterations, checkpoint_iterati
             lambda_tv = opt.lambda_tv_normal # if iteration <= opt.densify_until_iter else 0.15
             Ltv = weighted_tv_loss(albedo_ref, render_pkg["normal_map"], weight_map)
 
+            lambda_rough = opt.lambda_roughness
             Lr = roughness_loss(scene, viewpoint_cam, opt, render_pkg, pipe, background)
     
-            Lmat = Lpbr + lambda_smooth * Lsm + lambda_tv * Ltv + 0.15 * Lr # + lambda_envmap * Lenv
+            Lmat = Lpbr + lambda_smooth * Lsm + lambda_tv * Ltv + lambda_rough * Lr # + lambda_envmap * Lenv
             loss += Lmat
 
         loss.backward()
