@@ -160,6 +160,7 @@ def train(model, opt, pipe, test_iterations, save_iterations, checkpoint_iterati
             lambda_smooth = opt.lambda_smooth
             arm = [roughness_map, metallic_map] if model.metallic else [roughness_map]
             Lsm = tv_loss(albedo_ref, torch.cat(arm, dim=0))
+            Ltv = weighted_tv_loss(albedo_ref, render_pkg["normal_map"], weight_map)
 
             # Environment light loss
             # envmap = dr.texture(
@@ -183,13 +184,12 @@ def train(model, opt, pipe, test_iterations, save_iterations, checkpoint_iterati
             # blurred_roughness = F.avg_pool2d(roughness_map, kernel_size=3, stride=1, padding=1)
             # Lrough = (blurred_roughness - roughness_map).abs().mean()
 
-            lambda_tv = opt.lambda_tv_normal # if iteration <= opt.densify_until_iter else 0.15
-            Ltv = weighted_tv_loss(albedo_ref, render_pkg["normal_map"], weight_map)
+            # lambda_tv = opt.lambda_tv_normal # if iteration <= opt.densify_until_iter else 0.15
 
             lambda_rough = opt.lambda_roughness
             Lr = roughness_loss(scene, viewpoint_cam, opt, render_pkg, pipe, background)
     
-            Lmat = Lpbr + lambda_smooth * Lsm + lambda_tv * Ltv + lambda_rough * Lr # + lambda_envmap * Lenv
+            Lmat = Lpbr + lambda_smooth * (Lsm + Ltv) + lambda_rough * Lr # + lambda_envmap * Lenv
             loss += Lmat
 
         loss.backward()
