@@ -11,7 +11,6 @@
 
 import torch
 import math
-import torch.nn.functional as F
 
 from diff_gaussian_rasterization import GaussianRasterizationSettings, GaussianRasterizer
 from scene.gaussian_model import GaussianModel
@@ -89,7 +88,7 @@ def render(
     features = torch.zeros((means3D.shape[0], 10), dtype=torch.float32, device="cuda")
     features[:, 0] = 1.0 # alpha
     features[:, 1] = cam_points[:, 2] if pipe.z_depth else (cam_normals * cam_points).sum(dim=-1).abs() # distance
-    features[:, 2:5] = cam_normals
+    features[:, 2:5] = normals # cam_normals
     features[:, 5:8] = albedo
     features[:, 8:9] = roughness
     features[:, 9:10] = metallic
@@ -110,7 +109,7 @@ def render(
     rasterizer = GaussianRasterizer(raster_settings=raster_settings)
 
     # Rasterize visible Gaussians to image, obtain their radii (on screen). 
-    rendered_image, radii, observe, buffer, depth = rasterizer(
+    rendered_image, radii, observe, buffer, _ = rasterizer(
         means3D=means3D,
         means2D=means2D,
         opacities=opacity,
@@ -131,6 +130,17 @@ def render(
     #     normal_bg = torch.tensor([0.0, 0.0, 0.0], device=normal_map.device)
     #     normal_map = normal_map * alpha_map + (1.0 - alpha_map) * normal_bg[:, None, None]
 
+    local_normals = normal_map.permute(1, 2, 0).view(-1, 3) # (H * W, 3)
+    local_normals = local_normals @ viewpoint_camera.world_view_transform[:3, :3]
+    # local_normals = torch.nn.functional.normalize(local_normals, dim=1, p=2) # (H * W, 3)
+    H, W = viewpoint_camera.image_height, viewpoint_camera.image_width
+    local_map = local_normals.reshape(H, W, 3).permute(2, 0, 1) # (3, H, W)
+
+    distance_map = buffer[1:2, ...] # (1, H, W)
+    rays = viewpoint_camera.get_rays().view(-1, 3) # (H * W, 3)
+    denoms = torch.sum(local_normals * rays, dim=-1).view(1, H, W)
+    depth_map = distance_map / (denoms + 1e-8)
+
     out = {
         "render": rendered_image, # (3, H, W)
         "viewspace_points": screenspace_points, # (N, 4)
@@ -138,13 +148,14 @@ def render(
         "radii": radii, # (N,)
         "observe": observe, # (N,)
         "alpha_map": buffer[0:1, ...], # (1, H, W)
-        "distance_map": buffer[1:2, ...] if not pipe.z_depth else None, # (1, H, W)
-        "depth_map": buffer[1:2, ...] if pipe.z_depth else depth, # (1, H, W)
+        "distance_map": distance_map, # (1, H, W)
+        "depth_map": buffer[1:2, ...] if pipe.z_depth else depth_map, # (1, H, W)
         "normal_map": normal_map, # (3, H, W)
         "albedo_map": buffer[5:8, ...], # (3, H, W)
         "roughness_map": buffer[8:9, ...], # (1, H, W)
         "metallic_map": buffer[9:10, ...], # (1, H, W)
         "normal_mask": normal_mask, # (1, H, W)
+        "local_map": local_map, # (3, H, W)
     }
 
     if sobel_normal:
@@ -158,7 +169,7 @@ def render_normal_from_depth_map(viewpoint_cam, depth, bg_color, alpha_map):
     # depth: (H, W), bg_color: (3), alpha: (H, W)
     # normal_ref: (3, H, W)
     intrinsic, extrinsic = viewpoint_cam.get_calib_matrix_nerf()
-    normal_ref = normal_from_depth_image(depth, intrinsic.to(depth.device), extrinsic.to(depth.device), view_space=True)
+    normal_ref = normal_from_depth_image(depth, intrinsic.to(depth.device), extrinsic.to(depth.device), view_space=False)
     background = bg_color[None, None, ...]
     normal_ref = normal_ref * alpha_map[..., None] + background * (1. - alpha_map[..., None])
     normal_ref = normal_ref.permute(2, 0, 1) # (3, H, W)

@@ -16,9 +16,10 @@ def pbr_render(scene, viewpoint_cam, canonical_rays, render_pkg, metallic, gamma
     view_dirs = -(canonical_rays @ c2w.T).reshape(H, W, 3) # (H, W, 3)
 
     # Normals to world space
-    normals = render_pkg["normal_map"].permute(1, 2, 0).reshape(-1, 3) # (H * W, 3)
-    normals = normals @ c2w.T # (H * W, 3)
-    normal_map = normals.reshape(H, W, 3).permute(2, 0, 1) # (3, H, W)
+    # normals = render_pkg["normal_map"].permute(1, 2, 0).reshape(-1, 3) # (H * W, 3)
+    # normals = normals @ c2w.T # (H * W, 3)
+    # normal_map = normals.reshape(H, W, 3).permute(2, 0, 1) # (3, H, W)
+    normal_map = render_pkg["normal_map"] # (3, H, W)
     normal_map = torch.where(torch.norm(normal_map, dim=0, keepdim=True) > 0, F.normalize(normal_map, dim=0, p=2), normal_map)
 
     albedo_map = render_pkg["albedo_map"] # (3, H, W)

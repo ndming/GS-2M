@@ -175,7 +175,7 @@ def roughness_loss(scene, viewpoint_cam, opt, render_pkg, pipe, bg_color):
         rn_R = nearby_cam.world_view_transform[:3, :3].transpose(-1, -2) @ viewpoint_cam.world_view_transform[:3, :3]
         rn_t = -rn_R @ viewpoint_cam.world_view_transform[3, :3] + nearby_cam.world_view_transform[3, :3]
     
-        ref_local_n = render_pkg["normal_map"].permute(1, 2, 0) # (H, W, 3)
+        ref_local_n = render_pkg["local_map"].permute(1, 2, 0) # (H, W, 3)
         ref_local_n = ref_local_n.reshape(-1, 3)[valid_indices] # (N, 3)
         ref_local_d = render_pkg["distance_map"].squeeze() # (H, W)
         ref_local_d = ref_local_d.reshape(-1)[valid_indices] # (N,)
@@ -252,7 +252,7 @@ def multi_view_loss(scene, viewpoint_cam, opt, render_pkg, pipe, bg_color):
 
     # Sample normals at the pixel locations in the reference camera's view
     normals = _sample_normal_map(pixels, render_pkg['normal_map']) # (N, 3)
-    normals = normals @ viewpoint_cam.world_view_transform[:3, :3].T
+    # normals = normals @ viewpoint_cam.world_view_transform[:3, :3].T
     normals = normals / (normals.norm(dim=1, keepdim=True) + 1e-8)
     # Compute cosine similarity between normals in ref view and sampled normals in neighbor view
     cos_sim = torch.sum(normals * map_n, dim=1) # (N,)
@@ -305,7 +305,7 @@ def multi_view_loss(scene, viewpoint_cam, opt, render_pkg, pipe, bg_color):
         rn_R = nearest_cam.world_view_transform[:3, :3].transpose(-1, -2) @ viewpoint_cam.world_view_transform[:3, :3]
         rn_t = -rn_R @ viewpoint_cam.world_view_transform[3, :3] + nearest_cam.world_view_transform[3, :3]
 
-    ref_local_n = render_pkg["normal_map"].permute(1, 2, 0) # (H, W, 3)
+    ref_local_n = render_pkg["local_map"].permute(1, 2, 0) # (H, W, 3)
     ref_local_n = ref_local_n.reshape(-1, 3)[valid_indices] # (N, 3)
     ref_local_d = render_pkg["distance_map"].squeeze() # (H, W)
     ref_local_d = ref_local_d.reshape(-1)[valid_indices] # (N,)
@@ -440,7 +440,7 @@ def _sample_depth_normal(cam_points, camera, render_pkg, scale=1):
         align_corners=True)[0, :, :, 0].permute(1, 0)
     
     # Rotate normals to world coordinates
-    map_n = map_n @ camera.world_view_transform[:3, :3].T
+    # map_n = map_n @ camera.world_view_transform[:3, :3].T
     map_n = map_n / (map_n.norm(dim=1, keepdim=True) + 1e-8)
 
     return map_z, map_n, valid
