@@ -107,7 +107,7 @@ class OptimizationParams(ParamGroup):
         self.use_sparse_loss = True
         # PGSR
         self.lambda_planar = 100.0
-        self.lambda_depth_normal = 0.015
+        self.lambda_depth_normal = 0.03
         self.multi_view_num = 8
         self.multi_view_ncc_weight = 0.15
         self.multi_view_geo_weight = 0.03
@@ -121,7 +121,7 @@ class OptimizationParams(ParamGroup):
         # GS-IR/GS-ROR
         # self.lambda_tv_normal = 2.0
         self.lambda_smooth = 2.0
-        self.lambda_roughness = 0.3
+        self.lambda_roughness = 0.15
         # Ours
         self.geometry_from_iter = 5000
         self.material_from_iter = 30_000
