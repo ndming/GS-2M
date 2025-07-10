@@ -139,7 +139,7 @@ def render(
     distance_map = buffer[1:2, ...] # (1, H, W)
     rays = viewpoint_camera.get_rays().view(-1, 3) # (H * W, 3)
     denoms = torch.sum(local_normals * rays, dim=-1).view(1, H, W)
-    depth_map = distance_map / (denoms + 1e-8)
+    depth_map = distance_map / -(denoms + 1e-8)
 
     out = {
         "render": rendered_image, # (3, H, W)
