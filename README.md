@@ -87,6 +87,7 @@ improve robustness to noise but blur fine details.
 </details>
 
 ## Evaluation
+TODO
 
 ## Acknowledgements
 This repository and the entire project are based on previous Gaussian splatting works. We acknowledge and appreciate
