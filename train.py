@@ -101,11 +101,11 @@ def train(model, opt, pipe, test_iterations, save_iterations, checkpoint_iterati
 
         # Planar and sparse losses
         Lplane = planar_loss(visibility_filter, gaussians)
-        Lalpha = F.binary_cross_entropy(render_pkg["alpha_map"], viewpoint_cam.alpha_mask)
-        # Lsparse = sparse_loss(render_pkg["alpha_map"]) if opt.use_sparse_loss else 0.0
+        # Lalpha = F.binary_cross_entropy(render_pkg["alpha_map"], viewpoint_cam.alpha_mask)
+        Lsparse = sparse_loss(render_pkg["alpha_map"]) if opt.use_sparse_loss else 0.0
 
         # Total loss
-        loss = opt.lambda_planar * Lplane + 0.2 * Lalpha # + opt.lambda_sparse * Lsparse
+        loss = opt.lambda_planar * Lplane + opt.lambda_sparse * Lsparse # + 0.2 * Lalpha
         if not material_stage:
             loss += Lrgb
 

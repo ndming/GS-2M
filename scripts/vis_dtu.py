@@ -252,7 +252,7 @@ if __name__ == "__main__":
     ply_file = model_dir / "train" / f"{args.label}_{loaded_iter}" / "mesh" / f"tsdf_{args.label_mesh}.ply"
     scanID = int(model_dir.name[4:])
 
-    out_dir = model_dir / "train" / f"{args.label}_{loaded_iter}" / "visuals"
+    out_dir = model_dir / "train" / f"{args.label}_{loaded_iter}" / "visual"
     os.makedirs(out_dir, exist_ok=True)
 
     # Read camera poses
@@ -260,7 +260,7 @@ if __name__ == "__main__":
     with open(camera_file, 'r') as f:
         views = json.load(f) # an array of camera dicts
 
-    scene, camera, mesh, mat, light = prepare_blender_scene(ply_file, views[0])
+    scene, camera, mesh, mat, light = prepare_blender_scene(ply_file, views[0 if args.render_view_idx < 0 else args.render_view_idx])
     bsdf = mat.node_tree.nodes.get('Principled BSDF')
     mat_nodes = mat.node_tree.nodes
 
