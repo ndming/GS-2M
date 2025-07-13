@@ -252,7 +252,7 @@ if __name__ == "__main__":
     ply_file = model_dir / "train" / f"{args.label}_{loaded_iter}" / "mesh" / f"tsdf_{args.label_mesh}.ply"
     scanID = int(model_dir.name[4:])
 
-    out_dir = model_dir / "train" / f"{args.label}_{loaded_iter}" / "visuals"
+    out_dir = model_dir / "train" / f"{args.label}_{loaded_iter}" / "visual"
     os.makedirs(out_dir, exist_ok=True)
 
     # Read camera poses

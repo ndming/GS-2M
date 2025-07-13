@@ -138,9 +138,9 @@ def roughness_loss(scene, viewpoint_cam, opt, render_pkg, pipe, bg_color):
         return 0.0
     
     with torch.no_grad():
-        H, W = render_pkg['depth_map'].squeeze().shape
-        ix, iy = torch.meshgrid(torch.arange(W), torch.arange(H), indexing='xy')
-        pixels = torch.stack([ix, iy], dim=-1).float().to(render_pkg['depth_map'].device)
+        # H, W = render_pkg['depth_map'].squeeze().shape
+        # ix, iy = torch.meshgrid(torch.arange(W), torch.arange(H), indexing='xy')
+        # pixels = torch.stack([ix, iy], dim=-1).float().to(render_pkg['depth_map'].device)
         pts = _get_points_from_depth(viewpoint_cam, render_pkg['depth_map'])
 
         nearby_render_pkg = render(
@@ -159,7 +159,7 @@ def roughness_loss(scene, viewpoint_cam, opt, render_pkg, pipe, bg_color):
         if valid_indices.sum() == 0:
             return 0.0
 
-        pixels = pixels.reshape(-1,2)[valid_indices]
+        pixels = scene.pixels.reshape(-1, 2)[valid_indices]
         offsets = _patch_offsets(opt.multi_view_patch_size, pixels.device)
         ori_pixels_patch = pixels.reshape(-1, 1, 2) / ncc_scale + offsets.float()
 
@@ -199,7 +199,7 @@ def roughness_loss(scene, viewpoint_cam, opt, render_pkg, pipe, bg_color):
 
     rough_map = render_pkg["roughness_map"] # (1, H, W)
     h_map, w_map = rough_map.squeeze().shape
-    grid_map = pixels.reshape(-1, 1, 2).float()
+    grid_map = pixels.reshape(-1, 1, 2) # + offsets.float()
     grid_map = grid_map.clone()
     grid_map[:, :, 0] = 2 * grid_map[:, :, 0] / (w_map - 1.0) - 1.0
     grid_map[:, :, 1] = 2 * grid_map[:, :, 1] / (h_map - 1.0) - 1.0
@@ -209,13 +209,13 @@ def roughness_loss(scene, viewpoint_cam, opt, render_pkg, pipe, bg_color):
     # consistent_error = ncc_error.detach().pow(0.5)
     reflection_threshold = opt.reflection_threshold
     increase_mask = (ncc_error <  reflection_threshold) & (rough_vals <  1.00).detach()
-    decrease_mask = (ncc_error >= reflection_threshold) & (rough_vals >= 0.01).detach()
+    decrease_mask = (ncc_error >= reflection_threshold) & (rough_vals >= 0.04).detach()
 
     rough_loss = 0.0
     if increase_mask.sum() > 0:
-        rough_loss -= 0.02 * rough_vals[increase_mask].mean()
+        rough_loss -= rough_vals[increase_mask].mean()
     if decrease_mask.sum() > 0:
-        rough_loss += 0.08 * rough_vals[decrease_mask].mean()
+        rough_loss += rough_vals[decrease_mask].mean()
     return rough_loss
 
 def _sigmoid(x, k, t):
@@ -228,9 +228,9 @@ def multi_view_loss(scene, viewpoint_cam, opt, render_pkg, pipe, bg_color):
     if nearest_cam is None:
         return 0.0
 
-    H, W = render_pkg['depth_map'].squeeze().shape # (H, W)
-    ix, iy = torch.meshgrid(torch.arange(W), torch.arange(H), indexing='xy')
-    pixels = torch.stack([ix, iy], dim=-1).float().to(render_pkg['depth_map'].device) # (H, W, 2)
+    # H, W = render_pkg['depth_map'].squeeze().shape # (H, W)
+    # ix, iy = torch.meshgrid(torch.arange(W), torch.arange(H), indexing='xy')
+    # pixels = torch.stack([ix, iy], dim=-1).float().to(render_pkg['depth_map'].device) # (H, W, 2)
 
     # Render the depth map and normal map from the nearest camera
     nearest_render_pkg = render(
@@ -248,10 +248,10 @@ def multi_view_loss(scene, viewpoint_cam, opt, render_pkg, pipe, bg_color):
     # Use the sampled depth values to reproject the points in the neighbor camera's view to reference camera's view
     re_projections = _reproject_points(nearest_cam, viewpoint_cam, pts_in_nearest_cam, map_z)
     # Calculates the Euclidean distance (pixel_noise) between the original pixel locations and the reprojected ones
-    pixel_noise = torch.norm(re_projections - pixels.reshape(*re_projections.shape), dim=-1)
+    pixel_noise = torch.norm(re_projections - scene.pixels.reshape(*re_projections.shape), dim=-1)
 
     # Sample normals at the pixel locations in the reference camera's view
-    normals = _sample_normal_map(pixels, render_pkg['normal_map']) # (N, 3)
+    normals = _sample_normal_map(scene.pixels, render_pkg['normal_map']) # (N, 3)
     # normals = normals @ viewpoint_cam.world_view_transform[:3, :3].T
     normals = normals / (normals.norm(dim=1, keepdim=True) + 1e-8)
     # Compute cosine similarity between normals in ref view and sampled normals in neighbor view
@@ -289,7 +289,7 @@ def multi_view_loss(scene, viewpoint_cam, opt, render_pkg, pipe, bg_color):
             valid_indices = valid_indices[index]
 
         weights = weights.reshape(-1)[valid_indices]
-        pixels = pixels.reshape(-1,2)[valid_indices]
+        pixels = scene.pixels.reshape(-1, 2)[valid_indices]
         offsets = _patch_offsets(opt.multi_view_patch_size, pixels.device)
         ori_pixels_patch = pixels.reshape(-1, 1, 2) / ncc_scale + offsets.float()
 

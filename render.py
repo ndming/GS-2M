@@ -106,7 +106,7 @@ def render_views(model, split, iteration, views, scene, pipeline, background, ar
             # PBR render
             pbr_pkg = pbr_render(scene, view, canonical_rays, render_pkg, model.metallic, model.gamma)
             pbr_image = pbr_pkg["render_rgb"].clamp(0.0, 1.0).permute(2, 0, 1) # (3, H, W)
-            pbr_mask = view.alpha_mask.cuda() > 0.5 if model.mask_gt or model.white_background else pbr_pkg["normal_mask"]
+            pbr_mask = view.alpha_mask.cuda() > 0.5 if model.mask_gt or model.white_background else render_pkg["normal_mask"]
             bg_color = 0.0 if model.mask_gt else background[:, None, None]
             pbr_image = torch.where(pbr_mask, pbr_image, bg_color)
             torchvision.utils.save_image(pbr_image, render_dir / f"{image_stem}.png")
@@ -131,6 +131,8 @@ def render_views(model, split, iteration, views, scene, pipeline, background, ar
             os.makedirs(albedo_dir, exist_ok=True)
             os.makedirs(roughness_dir, exist_ok=True)
             os.makedirs(metallic_dir, exist_ok=True)
+            os.makedirs(diffuse_dir, exist_ok=True)
+            os.makedirs(specular_dir, exist_ok=True)
 
             if model.white_background:
                 map_to_rgba(albedo_map, view.alpha_mask).save(albedo_dir / f"{image_stem}.png")

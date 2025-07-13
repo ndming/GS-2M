@@ -134,6 +134,11 @@ class Scene:
         print("[>] Populating gray images")
         self._populate_gray_images(model.mask_gt, resolution_scale)
 
+        ref_camera = self.train_cameras[resolution_scale][0]
+        H, W = ref_camera.image_height, ref_camera.image_width
+        ix, iy = torch.meshgrid(torch.arange(W), torch.arange(H), indexing='xy')
+        self.pixels = torch.stack([ix, iy], dim=-1).float().cuda() # (H, W, 2)
+
         self.cubemap.train()
         param_groups = [
             { "name": "cubemap", "params": self.cubemap.parameters(), "lr": opt.opacity_lr },
