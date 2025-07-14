@@ -555,7 +555,7 @@ def _loss_ncc(ref, nea, std_mask=False):
     if not std_mask:
         return ncc, mask
     else:
-        return ncc, torch.sqrt(ref_var) < 0.02
+        return ncc, torch.sqrt(ref_var) < 0.01
 
 def _bilateral_weighted_ncc(ref, nea, sigma_g=0.1, sigma_x=1.0):
     """
