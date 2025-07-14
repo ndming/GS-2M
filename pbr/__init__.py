@@ -25,22 +25,24 @@ def pbr_render(scene, viewpoint_cam, canonical_rays, render_pkg, metallic, gamma
     albedo_map = render_pkg["albedo_map"].clamp(0, 1) # (3, H, W)
     metallic_map = render_pkg["metallic_map"] # (1, H, W)
     roughness_map = render_pkg["roughness_map"] # (1, H, W)
-    rmin, rmax = 0.02, 1.0
+    rmin, rmax = 0.04, 1.0
     roughness_map = roughness_map * (rmax - rmin) + rmin
+    roughness_map = roughness_map.detach()
 
     # If not training metallic, estimate it from roughness
     if not metallic:
         alpha_map = render_pkg["alpha_map"].detach() # (1, H, W)
         metallic_map = (1.0 - roughness_map).clamp(0, 1) # (1, H, W)
         metallic_map = alpha_map * metallic_map # (1, H, W)
+        metallic_map = metallic_map.detach()
 
     pbr_pkg = pbr_shading(
         light=scene.cubemap,
         normals=normal_map.permute(1, 2, 0).detach(), # (H, W, 3)
         view_dirs=view_dirs,
         albedo=albedo_map.permute(1, 2, 0), # (H, W, 3)
-        roughness=roughness_map.permute(1, 2, 0).detach(), # (H, W, 1)
-        metallic=metallic_map.permute(1, 2, 0).detach(), # (H, W, 1)
+        roughness=roughness_map.permute(1, 2, 0), # (H, W, 1)
+        metallic=metallic_map.permute(1, 2, 0), # (H, W, 1)
         occlusion=torch.ones_like(roughness_map).permute(1, 2, 0),
         irradiance=torch.zeros_like(roughness_map).permute(1, 2, 0),
         brdf_lut=scene.brdf_lut,

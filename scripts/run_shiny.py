@@ -1,3 +1,3 @@
 scenes = ["helmet", "car", "teapot", "coffee", "toaster", "ball"]
-reflection_thresholds = [0.1, 0.99, 2.8]
-# lambda_smooths = [2.5, 0.5, 2.0]
+reflection_thresholds = [0.1, 0.5, 2.8]
+lambda_smooths = [2.5, 0.01, 2.0]

@@ -126,7 +126,7 @@ class OptimizationParams(ParamGroup):
         self.mv_occlusion_threshold = 5e-4
         self.mv_pixel_weight_decay = 3.0
         self.lambda_multi_view = 1.0
-        self.lambda_normal = 0.2
+        self.lambda_normal = 0.5
         self.lambda_smooth = 0.01
         self.lambda_rough = 0.001
         self.lambda_alpha = 0.2

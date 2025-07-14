@@ -160,8 +160,8 @@ def train(model, opt, pipe, test_iterations, save_iterations, checkpoint_iterati
 
             # Smoothness loss
             lambda_smooth = opt.lambda_smooth
-            arm = [albedo_map, roughness_map, metallic_map] if model.metallic else [albedo_map, roughness_map]
-            Lsm = 0.0 # tv_loss(albedo_ref, torch.cat(arm, dim=0))
+            arm = [roughness_map, metallic_map] if model.metallic else [roughness_map]
+            Lsm = tv_loss(albedo_ref, torch.cat(arm, dim=0))
 
             lambda_normal = opt.lambda_normal
             Ltv = weighted_tv_loss(albedo_ref, render_pkg["normal_map"], weight_map)

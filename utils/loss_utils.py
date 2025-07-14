@@ -197,8 +197,12 @@ def roughness_loss(scene, viewpoint_cam, opt, render_pkg, pipe, bg_color):
         ref_grad = _patch_gradient(ref_gray_val, patch_size)
         nea_grad = _patch_gradient(sampled_gray_val, patch_size)
 
-        ncc, _ = _loss_ncc(ref_grad.view(-1, total_patch_size), nea_grad.view(-1, total_patch_size))
-        ncc_error = ncc.reshape(-1).detach() # (N,) valid_indices
+        ncc_grad, _ = _loss_ncc(ref_grad.view(-1, total_patch_size), nea_grad.view(-1, total_patch_size))
+        ncc_gray, std_mask = _loss_ncc(ref_gray_val, sampled_gray_val, std_mask=True)
+        ncc_error = torch.where(std_mask, ncc_grad, ncc_gray)
+        # ncc_error = torch.exp(-ncc_gray * 3.0) * ncc_gray + ncc_grad
+        ncc_error = ncc_error.reshape(-1).detach() # (N,) valid_indices
+        ncc_error = torch.tanh(8.0 * (ncc_error - opt.reflection_threshold))
         # ncc_error = (1.0 - _sigmoid(ncc_error, 4, 0.4)) * ncc_error.sqrt() + _sigmoid(ncc_error, 4, 0.4) * (ncc_error ** 2.5)
 
     rough_map = render_pkg["roughness_map"] # (1, H, W)
@@ -209,17 +213,18 @@ def roughness_loss(scene, viewpoint_cam, opt, render_pkg, pipe, bg_color):
     grid_map[:, :, 1] = 2 * grid_map[:, :, 1] / (h_map - 1.0) - 1.0
     rough_vals = F.grid_sample(rough_map.unsqueeze(1), grid_map.view(1, -1, 1, 2), align_corners=True)
     rough_vals = rough_vals.squeeze() # (N,) valid_indices
+    rough_mask = ((rough_vals >= 0.04) & (rough_vals <= 1.0)).detach()
 
     # consistent_error = ncc_error.detach().pow(0.5)
-    reflection_threshold = opt.reflection_threshold
-    increase_mask = (ncc_error <  reflection_threshold) & (rough_vals <  1.00).detach()
-    decrease_mask = (ncc_error >= reflection_threshold) & (rough_vals >= 0.02).detach()
+    # reflection_threshold = opt.reflection_threshold
+    # increase_mask = (ncc_error <  reflection_threshold) & (rough_vals <  1.00).detach()
+    # decrease_mask = (ncc_error >= reflection_threshold) & (rough_vals >= 0.02).detach()
 
-    rough_loss = 0.0
-    if increase_mask.sum() > 0:
-        rough_loss -= rough_vals[increase_mask].mean()
-    if decrease_mask.sum() > 0:
-        rough_loss += rough_vals[decrease_mask].mean()
+    rough_loss = (ncc_error * rough_vals)[rough_mask].mean()
+    # if increase_mask.sum() > 0:
+    #     rough_loss -= rough_vals[increase_mask].mean()
+    # if decrease_mask.sum() > 0:
+    #     rough_loss += rough_vals[decrease_mask].mean()
     return rough_loss
 
 def _patch_gradient(patch, patch_size):
@@ -511,7 +516,7 @@ def _patch_warp(H, uv):
     grid = grid_tmp[..., :2] / (grid_tmp[..., 2:] + 1e-10)
     return grid
 
-def _loss_ncc(ref, nea):
+def _loss_ncc(ref, nea, std_mask=False):
     # ref_gray: [batch_size, total_patch_size]
     # nea_grays: [batch_size, total_patch_size]
     bs, tps = nea.shape
@@ -546,7 +551,11 @@ def _loss_ncc(ref, nea):
     ncc = torch.clamp(ncc, 0.0, 2.0)
     ncc = torch.mean(ncc, dim=1, keepdim=True)
     mask = (ncc < 0.9)
-    return ncc, mask
+
+    if not std_mask:
+        return ncc, mask
+    else:
+        return ncc, torch.sqrt(ref_var) < 0.02
 
 def _bilateral_weighted_ncc(ref, nea, sigma_g=0.1, sigma_x=1.0):
     """
