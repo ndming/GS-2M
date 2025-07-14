@@ -42,7 +42,7 @@ class Scene:
 
         self.brdf_lut = get_brdf_lut().cuda()
         self.envmap_dirs = get_envmap_dirs()
-        self.cubemap = CubemapLight(base_res=256).cuda()
+        self.cubemap = CubemapLight(base_res=512).cuda()
 
         if load_iteration:
             if load_iteration == -1:

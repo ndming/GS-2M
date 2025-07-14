@@ -28,7 +28,7 @@ import torch.nn.functional as F
 import nvdiffrast.torch as dr
 
 from utils.general_utils import safe_state
-from utils.loss_utils import l1_loss, planar_loss, sparse_loss, tv_loss, roughness_loss, multi_view_loss, depth_normal_loss, weighted_tv_loss
+from utils.loss_utils import l1_loss, planar_loss, tv_loss, roughness_loss, multi_view_loss, depth_normal_loss, weighted_tv_loss
 from utils.training_utils import prepare_outdir, prepare_logger, report_training
 
 def train(model, opt, pipe, test_iterations, save_iterations, checkpoint_iterations, checkpoint):
@@ -93,18 +93,21 @@ def train(model, opt, pipe, test_iterations, save_iterations, checkpoint_iterati
         image, visibility_filter, radii = render_pkg["render"], render_pkg["visibility_filter"], render_pkg["radii"]
         gt_image = viewpoint_cam.gt_image.cuda()
 
-        # RGB losses
-        L1 = l1_loss(image, gt_image)
+        # D-SSIM loss
         lambda_ssim = opt.lambda_ssim
         Lssim = 1.0 - fused_ssim(image.unsqueeze(0), gt_image.unsqueeze(0))
+
+        # RGB loss
+        L1 = l1_loss(image, gt_image)
         Lrgb = (1.0 - lambda_ssim) * L1 + lambda_ssim * Lssim
 
         # Planar and sparse losses
         Lplanar = planar_loss(visibility_filter, gaussians)
-        Lsparse = sparse_loss(render_pkg["alpha_map"]) if opt.use_sparse_loss else 0.0
+        # Lsparse = sparse_loss(render_pkg["alpha_map"]) if opt.use_sparse_loss else 0.0
+        Lalpha = F.binary_cross_entropy(render_pkg["alpha_map"], viewpoint_cam.alpha_mask.cuda()) if model.white_background else 0.0
 
         # Total loss
-        loss = opt.lambda_planar * Lplanar + opt.lambda_sparse * Lsparse
+        loss = opt.lambda_planar * Lplanar + opt.lambda_alpha * Lalpha #  + opt.lambda_sparse * Lsparse
         if not material_stage:
             loss += Lrgb
 
@@ -131,9 +134,7 @@ def train(model, opt, pipe, test_iterations, save_iterations, checkpoint_iterati
                 # Ltv = Ltv_d + Ltv_n
             lambda_dn = opt.lambda_depth_normal
             # Ldn = (render_pkg["sobel_map"] - render_pkg["normal_map"]).abs().sum(dim=0).mean()
-            Ldn = depth_normal_loss(
-                render_pkg["normal_map"], render_pkg["sobel_map"], gt_image=albedo_ref,
-                weight_map=None if iteration <= opt.densify_until_iter else None)
+            Ldn = depth_normal_loss(render_pkg["normal_map"], render_pkg["sobel_map"], gt_image=albedo_ref)
 
             Lgeo = lambda_dn * Ldn + lambda_mv * Lmv # + lambda_tv * Ltv
             loss += Lgeo
@@ -145,8 +146,9 @@ def train(model, opt, pipe, test_iterations, save_iterations, checkpoint_iterati
             pbr_pkg = pbr_render(scene, viewpoint_cam, canonical_rays, render_pkg, model.metallic, model.gamma)
 
             normal_mask = render_pkg["normal_mask"] # (1, H, W)
-            roughness_map = pbr_pkg["roughness_map"] # (1, H, W)
-            metallic_map = pbr_pkg["metallic_map"] # (1, H, W)
+            albedo_map = render_pkg["albedo_map"] # (3, H, W)
+            roughness_map = render_pkg["roughness_map"] # (1, H, W)
+            metallic_map = render_pkg["metallic_map"] # (1, H, W)
 
             # Correct background color
             render_pbr = pbr_pkg["render_rgb"].permute(2, 0, 1) # (3, H, W)
@@ -158,8 +160,10 @@ def train(model, opt, pipe, test_iterations, save_iterations, checkpoint_iterati
 
             # Smoothness loss
             lambda_smooth = opt.lambda_smooth
-            arm = [roughness_map, metallic_map] if model.metallic else [roughness_map]
-            Lsm = tv_loss(albedo_ref, torch.cat(arm, dim=0))
+            arm = [albedo_map, roughness_map, metallic_map] if model.metallic else [albedo_map, roughness_map]
+            Lsm = 0.0 # tv_loss(albedo_ref, torch.cat(arm, dim=0))
+
+            lambda_normal = opt.lambda_normal
             Ltv = weighted_tv_loss(albedo_ref, render_pkg["normal_map"], weight_map)
 
             # Environment light loss
@@ -186,10 +190,10 @@ def train(model, opt, pipe, test_iterations, save_iterations, checkpoint_iterati
 
             # lambda_tv = opt.lambda_tv_normal # if iteration <= opt.densify_until_iter else 0.15
 
-            lambda_rough = opt.lambda_roughness
+            lambda_rough = opt.lambda_rough
             Lr = roughness_loss(scene, viewpoint_cam, opt, render_pkg, pipe, background)
     
-            Lmat = Lpbr + lambda_smooth * (Lsm + Ltv) + lambda_rough * Lr # + lambda_envmap * Lenv
+            Lmat = Lpbr + lambda_smooth * Lsm + lambda_normal * Ltv + lambda_rough * Lr # + lambda_envmap * Lenv
             loss += Lmat
 
         loss.backward()

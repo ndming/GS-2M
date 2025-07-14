@@ -58,20 +58,13 @@ class CubemapLight(nn.Module):
     # for nvdiffrec
     LIGHT_MIN_RES = 16
 
-    MIN_ROUGHNESS = 0.08
+    MIN_ROUGHNESS = 0.02
     MAX_ROUGHNESS = 0.5
 
-    def __init__(
-        self,
-        base_res: int = 512,
-        scale: float = 0.5,
-        bias: float = 0.25,
-    ) -> None:
+    def __init__(self, base_res=512, scale=0.5, bias=0.25) -> None:
         super(CubemapLight, self).__init__()
         self.mtx = None
-        base = (
-            torch.rand(6, base_res, base_res, 3, dtype=torch.float32, device="cuda") * scale + bias
-        )
+        base = (torch.rand(6, base_res, base_res, 3, dtype=torch.float32, device="cuda") * scale + bias)
         self.base = nn.Parameter(base)
         self.register_parameter("env_base", self.base)
 
@@ -101,9 +94,7 @@ class CubemapLight(nn.Module):
         self.diffuse = diffuse_cubemap(self.specular[-1])
 
         for idx in range(len(self.specular) - 1):
-            roughness = (idx / (len(self.specular) - 2)) * (
-                self.MAX_ROUGHNESS - self.MIN_ROUGHNESS
-            ) + self.MIN_ROUGHNESS
+            roughness = (idx / (len(self.specular) - 2)) * (self.MAX_ROUGHNESS - self.MIN_ROUGHNESS) + self.MIN_ROUGHNESS
             self.specular[idx] = specular_cubemap(self.specular[idx], roughness, cutoff)
         self.specular[-1] = specular_cubemap(self.specular[-1], 1.0, cutoff)
 

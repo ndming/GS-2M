@@ -193,9 +193,13 @@ def roughness_loss(scene, viewpoint_cam, opt, render_pkg, pipe, bg_color):
         sampled_gray_val = F.grid_sample(nearest_image_gray[None], grid.reshape(1, -1, 1, 2), align_corners=True)
         sampled_gray_val = sampled_gray_val.reshape(-1, total_patch_size)
 
-        ncc, _ = _loss_ncc(ref_gray_val, sampled_gray_val)
+        patch_size = opt.multi_view_patch_size * 2 + 1
+        ref_grad = _patch_gradient(ref_gray_val, patch_size)
+        nea_grad = _patch_gradient(sampled_gray_val, patch_size)
+
+        ncc, _ = _loss_ncc(ref_grad.view(-1, total_patch_size), nea_grad.view(-1, total_patch_size))
         ncc_error = ncc.reshape(-1).detach() # (N,) valid_indices
-        ncc_error = (1.0 - _sigmoid(ncc_error, 4, 0.4)) * ncc_error.sqrt() + _sigmoid(ncc_error, 4, 0.4) * (ncc_error ** 2.5)
+        # ncc_error = (1.0 - _sigmoid(ncc_error, 4, 0.4)) * ncc_error.sqrt() + _sigmoid(ncc_error, 4, 0.4) * (ncc_error ** 2.5)
 
     rough_map = render_pkg["roughness_map"] # (1, H, W)
     h_map, w_map = rough_map.squeeze().shape
@@ -209,7 +213,7 @@ def roughness_loss(scene, viewpoint_cam, opt, render_pkg, pipe, bg_color):
     # consistent_error = ncc_error.detach().pow(0.5)
     reflection_threshold = opt.reflection_threshold
     increase_mask = (ncc_error <  reflection_threshold) & (rough_vals <  1.00).detach()
-    decrease_mask = (ncc_error >= reflection_threshold) & (rough_vals >= 0.04).detach()
+    decrease_mask = (ncc_error >= reflection_threshold) & (rough_vals >= 0.02).detach()
 
     rough_loss = 0.0
     if increase_mask.sum() > 0:
@@ -217,6 +221,14 @@ def roughness_loss(scene, viewpoint_cam, opt, render_pkg, pipe, bg_color):
     if decrease_mask.sum() > 0:
         rough_loss += rough_vals[decrease_mask].mean()
     return rough_loss
+
+def _patch_gradient(patch, patch_size):
+    patch = patch.view(-1, 1, patch_size, patch_size)
+    sobel_x = torch.tensor([[-1, 0, 1], [-2, 0, 2], [-1, 0, 1]], dtype=patch.dtype, device=patch.device).view(1, 1, 3, 3)
+    sobel_y = sobel_x.transpose(-1, -2)
+    grad_x = F.conv2d(patch, sobel_x, padding=1)
+    grad_y = F.conv2d(patch, sobel_y, padding=1)
+    return torch.sqrt(grad_x ** 2 + grad_y ** 2 + 1e-6)
 
 def _sigmoid(x, k, t):
     return 1.0 / (1.0 + torch.exp(-k * (x - t)))

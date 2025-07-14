@@ -118,10 +118,6 @@ class OptimizationParams(ParamGroup):
         self.use_multi_view_trim = True
         self.multi_view_sample_num = 102400
         self.multi_view_patch_size = 3
-        # GS-IR/GS-ROR
-        # self.lambda_tv_normal = 2.0
-        self.lambda_smooth = 2.0
-        self.lambda_roughness = 0.3
         # Ours
         self.geometry_from_iter = 5000
         self.material_from_iter = 30_000
@@ -130,7 +126,11 @@ class OptimizationParams(ParamGroup):
         self.mv_occlusion_threshold = 5e-4
         self.mv_pixel_weight_decay = 3.0
         self.lambda_multi_view = 1.0
-        self.reflection_threshold = 0.3
+        self.lambda_normal = 0.2
+        self.lambda_smooth = 0.01
+        self.lambda_rough = 0.001
+        self.lambda_alpha = 0.2
+        self.reflection_threshold = 1.0
         self.nearby_cam_num = 16
         self.nearby_cam_max_angle = 60
         self.nearby_cam_min_angle = 10
