@@ -25,7 +25,7 @@ def pbr_render(scene, viewpoint_cam, canonical_rays, render_pkg, metallic, gamma
     albedo_map = render_pkg["albedo_map"].clamp(0, 1) # (3, H, W)
     metallic_map = render_pkg["metallic_map"] # (1, H, W)
     roughness_map = render_pkg["roughness_map"] # (1, H, W)
-    rmin, rmax = 0.04, 1.0
+    rmin, rmax = 0.08, 1.0
     roughness_map = roughness_map * (rmax - rmin) + rmin
     roughness_map = roughness_map.detach()
 

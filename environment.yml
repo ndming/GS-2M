@@ -24,7 +24,6 @@ dependencies:
       - submodules/fused-ssim
       - open3d==0.18.0
       - opencv-python
-      - kornia
       - matplotlib
       - scikit-image # for DTU evaluation
       - scikit-learn # for DTU evaluation

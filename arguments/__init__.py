@@ -106,8 +106,8 @@ class OptimizationParams(ParamGroup):
         self.lambda_sparse = 0.001
         self.use_sparse_loss = True
         # PGSR
-        self.lambda_planar = 100.0
-        self.lambda_depth_normal = 0.015
+        self.lambda_planar = 50.0
+        self.lambda_depth_normal = 0.03
         self.multi_view_num = 8
         self.multi_view_ncc_weight = 0.15
         self.multi_view_geo_weight = 0.03
@@ -126,7 +126,7 @@ class OptimizationParams(ParamGroup):
         self.mv_occlusion_threshold = 5e-4
         self.mv_pixel_weight_decay = 3.0
         self.lambda_multi_view = 1.0
-        self.lambda_normal = 0.5
+        self.lambda_normal = 1.5
         self.lambda_smooth = 0.01
         self.lambda_rough = 0.001
         self.lambda_alpha = 0.2

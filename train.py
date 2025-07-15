@@ -28,7 +28,7 @@ import torch.nn.functional as F
 import nvdiffrast.torch as dr
 
 from utils.general_utils import safe_state
-from utils.loss_utils import l1_loss, planar_loss, tv_loss, roughness_loss, multi_view_loss, depth_normal_loss, weighted_tv_loss
+from utils.loss_utils import l1_loss, planar_loss, tv_loss, roughness_loss, multi_view_loss, depth_normal_loss, masked_tv_loss
 from utils.training_utils import prepare_outdir, prepare_logger, report_training
 
 def train(model, opt, pipe, test_iterations, save_iterations, checkpoint_iterations, checkpoint):
@@ -107,9 +107,9 @@ def train(model, opt, pipe, test_iterations, save_iterations, checkpoint_iterati
         Lalpha = F.binary_cross_entropy(render_pkg["alpha_map"], viewpoint_cam.alpha_mask.cuda()) if model.white_background else 0.0
 
         # Total loss
-        loss = opt.lambda_planar * Lplanar + opt.lambda_alpha * Lalpha #  + opt.lambda_sparse * Lsparse
+        loss = lambda_ssim * Lssim + opt.lambda_planar * Lplanar + opt.lambda_alpha * Lalpha # + opt.lambda_sparse * Lsparse
         if not material_stage:
-            loss += Lrgb
+            loss += (1.0 - lambda_ssim) * L1
 
         # Geometry losses
         Lgeo = torch.tensor([0.0])
@@ -121,20 +121,21 @@ def train(model, opt, pipe, test_iterations, save_iterations, checkpoint_iterati
             lambda_mv = opt.lambda_multi_view # expensive, only call if needed
             Lmv = 0.0 if lambda_mv == 0.0 else multi_view_loss(scene, viewpoint_cam, opt, render_pkg, pipe, background)
 
-            weight_map = None
-            albedo_ref = gt_image
+            # weight_map = None
+            render_ref = gt_image
             if material_stage:
-                # weight_map = 2.0 + 4.0 * (1.0 - render_pkg["roughness_map"]).clamp(0, 1)
-                weight_map = (1.0 - render_pkg["roughness_map"]).clamp(0, 1) ** 2.5
-                weight_map = weight_map.detach() # (1, H, W)
-                albedo_ref = render_pkg["albedo_map"].detach() # (3, H, W)
-                # Ldn = (weight_map * (render_pkg["sobel_map"] - render_pkg["normal_map"]).abs().sum(dim=0)).mean()
-                # Ltv = laplacian_loss(render_pkg["normal_map"], smooth_map)
-                # Ltv_d = laplacian_loss(render_pkg["depth_map"], smooth_map)
-                # Ltv = Ltv_d + Ltv_n
+                render_ref = image.detach()
+            #     # weight_map = 2.0 + 4.0 * (1.0 - render_pkg["roughness_map"]).clamp(0, 1)
+            #     weight_map = (1.0 - render_pkg["roughness_map"]).clamp(0, 1) ** 2.5
+            #     weight_map = weight_map.detach() # (1, H, W)
+            #     albedo_ref = render_pkg["albedo_map"].detach() # (3, H, W)
+            #     # Ldn = (weight_map * (render_pkg["sobel_map"] - render_pkg["normal_map"]).abs().sum(dim=0)).mean()
+            #     # Ltv = laplacian_loss(render_pkg["normal_map"], smooth_map)
+            #     # Ltv_d = laplacian_loss(render_pkg["depth_map"], smooth_map)
+            #     # Ltv = Ltv_d + Ltv_n
             lambda_dn = opt.lambda_depth_normal
             # Ldn = (render_pkg["sobel_map"] - render_pkg["normal_map"]).abs().sum(dim=0).mean()
-            Ldn = depth_normal_loss(render_pkg["normal_map"], render_pkg["sobel_map"], gt_image=albedo_ref)
+            Ldn = depth_normal_loss(render_pkg["normal_map"], render_pkg["sobel_map"], gt_image=render_ref)
 
             Lgeo = lambda_dn * Ldn + lambda_mv * Lmv # + lambda_tv * Ltv
             loss += Lgeo
@@ -161,10 +162,10 @@ def train(model, opt, pipe, test_iterations, save_iterations, checkpoint_iterati
             # Smoothness loss
             lambda_smooth = opt.lambda_smooth
             arm = [roughness_map, metallic_map] if model.metallic else [roughness_map]
-            Lsm = tv_loss(albedo_ref, torch.cat(arm, dim=0))
+            Lsm = tv_loss(render_ref, torch.cat(arm, dim=0))
 
             lambda_normal = opt.lambda_normal
-            Ltv = weighted_tv_loss(albedo_ref, render_pkg["normal_map"], weight_map)
+            Ltv = masked_tv_loss(roughness_map.detach() < 0.5, render_ref, render_pkg["normal_map"])
 
             # Environment light loss
             # envmap = dr.texture(

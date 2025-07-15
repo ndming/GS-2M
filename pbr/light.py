@@ -58,7 +58,7 @@ class CubemapLight(nn.Module):
     # for nvdiffrec
     LIGHT_MIN_RES = 16
 
-    MIN_ROUGHNESS = 0.04
+    MIN_ROUGHNESS = 0.08
     MAX_ROUGHNESS = 0.5
 
     def __init__(self, base_res=512, scale=0.5, bias=0.25) -> None:
