@@ -37,7 +37,7 @@ def train(model, opt, pipe, test_iterations, save_iterations, checkpoint_iterati
         print("[>] Enabled material optimization")
     else:
         opt.material_from_iter = opt.iterations
-        print("[>] Disabled material optimization")
+        print("[!] Disabled material optimization")
 
     prepare_outdir(model)
     tb_writer = prepare_logger(model)
@@ -51,14 +51,16 @@ def train(model, opt, pipe, test_iterations, save_iterations, checkpoint_iterati
     first_iter = 0
     if checkpoint:
         ckp = torch.load(checkpoint)
-        model_params = ckp["gaussians"]
         first_iter = ckp["iteration"]
-        cubemap_state = ckp["cubemap"]
-        light_optimizer_state = ckp["light_optimizer"]
 
+        model_params = ckp["gaussians"]
         gaussians.restore(model_params, opt)
-        scene.cubemap.load_state_dict(cubemap_state)
-        scene.light_optimizer.load_state_dict(light_optimizer_state)
+
+        if model.material:
+            cubemap_state = ckp["cubemap"]
+            light_optimizer_state = ckp["light_optimizer"]
+            scene.cubemap.load_state_dict(cubemap_state)
+            scene.light_optimizer.load_state_dict(light_optimizer_state)
 
     background = torch.tensor([0, 0, 0], dtype=torch.float32, device="cuda")
     iter_start = torch.cuda.Event(enable_timing = True)
@@ -102,12 +104,12 @@ def train(model, opt, pipe, test_iterations, save_iterations, checkpoint_iterati
         Lrgb = (1.0 - lambda_ssim) * L1 + lambda_ssim * Lssim
 
         # Planar and sparse losses
-        Lplanar = planar_loss(visibility_filter, gaussians)
+        Lplane = planar_loss(visibility_filter, gaussians)
         # Lsparse = sparse_loss(render_pkg["alpha_map"]) if opt.use_sparse_loss else 0.0
         Lalpha = F.binary_cross_entropy(render_pkg["alpha_map"], viewpoint_cam.alpha_mask.cuda()) if model.white_background else 0.0
 
         # Total loss
-        loss = lambda_ssim * Lssim + opt.lambda_planar * Lplanar + opt.lambda_alpha * Lalpha # + opt.lambda_sparse * Lsparse
+        loss = lambda_ssim * Lssim + opt.lambda_plane * Lplane + opt.lambda_alpha * Lalpha # + opt.lambda_sparse * Lsparse
         if not material_stage:
             loss += (1.0 - lambda_ssim) * L1
 
@@ -122,9 +124,7 @@ def train(model, opt, pipe, test_iterations, save_iterations, checkpoint_iterati
             Lmv = 0.0 if lambda_mv == 0.0 else multi_view_loss(scene, viewpoint_cam, opt, render_pkg, pipe, background)
 
             # weight_map = None
-            render_ref = gt_image
-            if material_stage:
-                render_ref = image.detach()
+            render_ref = image.detach() if material_stage else gt_image
             #     # weight_map = 2.0 + 4.0 * (1.0 - render_pkg["roughness_map"]).clamp(0, 1)
             #     weight_map = (1.0 - render_pkg["roughness_map"]).clamp(0, 1) ** 2.5
             #     weight_map = weight_map.detach() # (1, H, W)
@@ -147,7 +147,6 @@ def train(model, opt, pipe, test_iterations, save_iterations, checkpoint_iterati
             pbr_pkg = pbr_render(scene, viewpoint_cam, canonical_rays, render_pkg, model.metallic, model.gamma)
 
             normal_mask = render_pkg["normal_mask"] # (1, H, W)
-            albedo_map = render_pkg["albedo_map"] # (3, H, W)
             roughness_map = render_pkg["roughness_map"] # (1, H, W)
             metallic_map = render_pkg["metallic_map"] # (1, H, W)
 
@@ -217,14 +216,16 @@ def train(model, opt, pipe, test_iterations, save_iterations, checkpoint_iterati
                 progress_bar.update(10)
 
             # Log and save
-            pbr_stats = iteration > opt.material_from_iter
             report_training(
                 tb_writer, iteration, Lrgb, Lgeo, Lmat, loss, iter_start.elapsed_time(iter_end), test_iterations,
-                scene, model.metallic, model.gamma, render, pipe, model.white_background, pbr_stats, canonical_rays)
+                scene, model.metallic, model.gamma, render, pipe, model.white_background, material_stage, canonical_rays)
 
             if (iteration in save_iterations):
-                tqdm.write(f"[ITER {iteration:>5}] Saving Gaussians and lighting")
-                scene.save(iteration)
+                save_msg = f"[ITER {iteration:>5}] Saving Gaussians"
+                if model.material:
+                    save_msg += " and lighting"
+                tqdm.write(save_msg)
+                scene.save(iteration, save_lighting=model.material)
 
             # Densification
             if iteration <= opt.densify_until_iter:
@@ -275,10 +276,13 @@ def train(model, opt, pipe, test_iterations, save_iterations, checkpoint_iterati
                 os.makedirs(ckp_dir, exist_ok=True)
                 ckp_dict = {
                     "gaussians": gaussians.capture(),
-                    "cubemap": scene.cubemap.state_dict(),
-                    "light_optimizer": scene.light_optimizer.state_dict(),
                     "iteration": iteration,
                 }
+                if model.material:
+                    ckp_dict.update({
+                        "cubemap": scene.cubemap.state_dict(),
+                        "light_optimizer": scene.light_optimizer.state_dict(),
+                    })
                 torch.save(ckp_dict, ckp_dir + "/ckp" + str(iteration) + ".pth")
 
             if iteration == opt.iterations:

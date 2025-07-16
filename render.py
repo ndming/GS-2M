@@ -48,11 +48,11 @@ def render_views(model, split, iteration, views, scene, pipeline, background, ar
     os.makedirs(normal_dir, exist_ok=True)
     os.makedirs(depth_dir, exist_ok=True)
 
-    scene.cubemap.build_mips()
-    canonical_rays = scene.get_canonical_rays()
-
     # Environment map
     if model.material:
+        scene.cubemap.build_mips()
+        canonical_rays = F.normalize(scene.get_canonical_rays(), p=2, dim=-1)
+
         envmap = scene.cubemap.export_envmap(return_img=True).permute(2, 0, 1).clamp(0.0, 1.0) # (3, H, W)
         torchvision.utils.save_image(envmap, model_dir / split / f"{args.label}_{iteration}" / "envmap.png")
 
@@ -263,7 +263,8 @@ if __name__ == "__main__":
     with torch.no_grad():
         gaussians = GaussianModel(model.sh_degree)
         scene = Scene(model, gaussians, load_iteration=args.iteration, shuffle=False)
-        scene.cubemap.eval()
+        if model.material:
+            scene.cubemap.eval()
 
         bg_color = [1, 1, 1] if model.white_background else [0, 0, 0]
         background = torch.tensor(bg_color, dtype=torch.float32, device="cuda")

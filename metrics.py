@@ -41,8 +41,8 @@ def evaluate(model_path, split, method):
         raise FileNotFoundError(f"Split directory {split_dir} does not exist, did you forget to specify --split?.")
 
     method_dir = split_dir / method
-    gt_dir = method_dir/ "gts"
-    render_dir = method_dir / "renders"
+    gt_dir = method_dir/ "gt"
+    render_dir = method_dir / "render"
     renders, gts, _ = read_images(render_dir, gt_dir)
 
     ssims = []

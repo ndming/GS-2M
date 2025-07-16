@@ -102,17 +102,13 @@ def convert_normal_for_save(normal_map, viewpoint, world_space=False):
 
     # Flatten and normalize normals
     normals = normal_map.permute(1, 2, 0).view(-1, 3).clone() # (H * W, 3)
-    # valid_mask = ~(normals == 0).all(dim=1)
     normals = torch.nn.functional.normalize(normals, dim=1, p=2)
 
-    # Apply Y-up and Z-back coordinate fix
-    # T = torch.tensor([[1, 0, 0], [0, -1, 0], [0, 0, -1]], dtype=normals.dtype, device=normals.device)
-    # normals[~valid_mask] = normals[~valid_mask] @ T.T
-
-    # if world_space:
-    #     normals[valid_mask] = normals[valid_mask] @ viewpoint.world_view_transform[:3, :3]
-    # else:
-    #     normals[valid_mask] = normals[valid_mask] @ T.T
+    if not world_space:
+        # Transform to view space and apply Y-up/Z-back coordinate fix
+        normals = normals @ viewpoint.world_view_transform[:3, :3]
+        T = torch.tensor([[1, 0, 0], [0, -1, 0], [0, 0, -1]], dtype=normals.dtype, device=normals.device)
+        normals = normals @ T.T
 
     # Adjust range
     normals = normals * 0.5 + 0.5 # [-1, 1] -> [0, 1]

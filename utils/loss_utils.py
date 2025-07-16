@@ -206,18 +206,18 @@ def roughness_loss(scene, viewpoint_cam, opt, render_pkg, pipe, bg_color):
 
     rough_map = render_pkg["roughness_map"] # (1, H, W)
     h_map, w_map = rough_map.squeeze().shape
-    grid_map = pixels.reshape(-1, 1, 2) # + offsets.float()
+    grid_map = pixels.reshape(-1, 1, 2)
     grid_map = grid_map.clone()
     grid_map[:, :, 0] = 2 * grid_map[:, :, 0] / (w_map - 1.0) - 1.0
     grid_map[:, :, 1] = 2 * grid_map[:, :, 1] / (h_map - 1.0) - 1.0
     rough_vals = F.grid_sample(rough_map.unsqueeze(1), grid_map.view(1, -1, 1, 2), align_corners=True)
     rough_vals = rough_vals.squeeze() # (N,) valid_indices
-    rough_mask = ((rough_vals >= 0.08) & (rough_vals <= 1.0)).detach()
 
     # consistent_error = ncc_error.detach().pow(0.5)
     # reflection_threshold = opt.reflection_threshold
-    # increase_mask = (ncc_error <  reflection_threshold) & (rough_vals <  1.00).detach()
-    # decrease_mask = (ncc_error >= reflection_threshold) & (rough_vals >= 0.02).detach()
+    increase_mask = (ncc_error < 0.0) & (rough_vals <= 0.5).detach()
+    decrease_mask = (ncc_error > 0.0) & (rough_vals >= 0.1).detach()
+    rough_mask = increase_mask | decrease_mask
 
     rough_loss = (ncc_error * rough_vals)[rough_mask].mean() if rough_mask.sum() > 0 else 0.0
     # if increase_mask.sum() > 0:
