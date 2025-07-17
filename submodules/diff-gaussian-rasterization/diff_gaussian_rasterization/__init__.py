@@ -80,16 +80,16 @@ class _RasterizeGaussians(torch.autograd.Function):
         )
 
         # Invoke C++/CUDA rasterizer
-        num_rendered, color, radii, observe, buffer, depth, geomBuffer, binningBuffer, imgBuffer = _C.rasterize_gaussians(*args)
+        num_rendered, color, radii, observe, buffer, geomBuffer, binningBuffer, imgBuffer = _C.rasterize_gaussians(*args)
 
         # Keep relevant tensors for backward
         ctx.raster_settings = raster_settings
         ctx.num_rendered = num_rendered
         ctx.save_for_backward(buffer, features, colors_precomp, means3D, scales, rotations, cov3Ds_precomp, radii, shs, geomBuffer, binningBuffer, imgBuffer)
-        return color, radii, observe, buffer, depth
+        return color, radii, observe, buffer
 
     @staticmethod
-    def backward(ctx, grad_out_color, grad_out_radii, grad_out_observe, grad_out_buffer, grad_out_depth):
+    def backward(ctx, grad_out_color, grad_out_radii, grad_out_observe, grad_out_buffer):
         # Restore necessary values from context
         num_rendered = ctx.num_rendered
         raster_settings = ctx.raster_settings
@@ -112,7 +112,6 @@ class _RasterizeGaussians(torch.autograd.Function):
                 raster_settings.tanfovy,
                 grad_out_color,
                 grad_out_buffer,
-                grad_out_depth,
                 shs,
                 raster_settings.sh_degree,
                 raster_settings.campos,

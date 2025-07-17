@@ -248,8 +248,6 @@ __global__ void __launch_bounds__(BLOCK_X * BLOCK_Y) renderCUDA(
         const uint2* __restrict__ ranges,
         const uint32_t* __restrict__ indices,
         const int W, const int H,
-        const float focal_x, const float focal_y,
-        const float cx, const float cy,
         const float* viewmatrix,
         const float* cam_pos,
         const float2* __restrict__ img_points,
@@ -262,8 +260,7 @@ __global__ void __launch_bounds__(BLOCK_X * BLOCK_Y) renderCUDA(
         const int featureCount,
         float* __restrict__ out_colors,
         int* __restrict__ out_observe,
-        float* __restrict__ out_buffer,
-        float* __restrict__ out_depth) {
+        float* __restrict__ out_buffer) {
     // Identify current tile and associated min/max pixel range.
     auto block = cg::this_thread_block();
     uint32_t horizontal_blocks = (W + BLOCK_X - 1) / BLOCK_X;
@@ -371,12 +368,6 @@ __global__ void __launch_bounds__(BLOCK_X * BLOCK_Y) renderCUDA(
 
         for (int ch = 0; ch < featureCount; ch++)
             out_buffer[ch * H * W + pix_id] = F[ch];
-
-        if (featureCount > BOOTSTRAP_FEATURE_END) {
-            // Channel 1: distance, channel 2-5: normals
-            const float2 ray = { (pixf.x - cx) / focal_x, (pixf.y - cy) / focal_y };
-            out_depth[pix_id] = F[1] / -(F[2] * ray.x + F[3] * ray.y + F[4] + 1.0e-8);
-        }
     }
 }
 
@@ -385,8 +376,6 @@ void FORWARD::render(
     const uint2* ranges,
     const uint32_t* indices,
     const int W, const int H,
-    const float focal_x, const float focal_y,
-    const float cx, const float cy,
     const float* viewmatrix,
     const float* cam_pos,
     const float2* img_points,
@@ -399,15 +388,12 @@ void FORWARD::render(
     const int featureCount,
     float* out_colors,
     int* out_observe,
-    float* out_buffer,
-    float* out_depth)
+    float* out_buffer)
 {
     renderCUDA<NUM_CHANNELS, NUM_FEATURES> <<<grid, block>>> (
         ranges,
         indices,
         W, H,
-        focal_x, focal_y,
-        cx, cy,
         viewmatrix,
         cam_pos,
         img_points,
@@ -420,8 +406,7 @@ void FORWARD::render(
         featureCount,
         out_colors,
         out_observe,
-        out_buffer,
-        out_depth);
+        out_buffer);
 }
 
 void FORWARD::preprocess(

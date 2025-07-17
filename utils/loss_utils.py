@@ -137,14 +137,11 @@ def roughness_loss(scene, viewpoint_cam, opt, render_pkg, pipe, bg_color):
         return 0.0
     
     with torch.no_grad():
-        # H, W = render_pkg['depth_map'].squeeze().shape
-        # ix, iy = torch.meshgrid(torch.arange(W), torch.arange(H), indexing='xy')
-        # pixels = torch.stack([ix, iy], dim=-1).float().to(render_pkg['depth_map'].device)
         pts = _get_points_from_depth(viewpoint_cam, render_pkg['depth_map'])
+        pts_in_nearby_cam = pts @ nearby_cam.world_view_transform[:3, :3] + nearby_cam.world_view_transform[3, :3]
 
         nearby_render_pkg = render(
             nearby_cam, scene.gaussians, pipe, bg_color, geometry_stage=True, material_stage=False, sobel_normal=False)
-        pts_in_nearby_cam = pts @ nearby_cam.world_view_transform[:3, :3] + nearby_cam.world_view_transform[3, :3]
         map_z, _, valid = _sample_depth_normal(pts_in_nearby_cam, nearby_cam, nearby_render_pkg)
         valid = valid & (pts_in_nearby_cam[:, 2] - map_z <= opt.mv_occlusion_threshold)
 
@@ -244,10 +241,6 @@ def multi_view_loss(scene, viewpoint_cam, opt, render_pkg, pipe, bg_color):
     if nearest_cam is None:
         return 0.0
 
-    # H, W = render_pkg['depth_map'].squeeze().shape # (H, W)
-    # ix, iy = torch.meshgrid(torch.arange(W), torch.arange(H), indexing='xy')
-    # pixels = torch.stack([ix, iy], dim=-1).float().to(render_pkg['depth_map'].device) # (H, W, 2)
-
     # Render the depth map and normal map from the nearest camera
     nearest_render_pkg = render(
         nearest_cam, scene.gaussians, pipe, bg_color, geometry_stage=True, material_stage=False, sobel_normal=False)
@@ -284,17 +277,7 @@ def multi_view_loss(scene, viewpoint_cam, opt, render_pkg, pipe, bg_color):
 
     pixel_loss = (weights * pixel_noise)[pixel_valid].mean() if pixel_valid.sum() > 0 else 0.0
     angle_loss = (weights * angle_noise)[angle_valid].mean() if angle_valid.sum() > 0 else 0.0
-    geo_loss = 0.2 * pixel_loss + angle_loss
-
-    # if material_stage:
-    #     roughness_map = render_pkg["roughness_map"] # (1, H, W)
-    #     rough_flatten = roughness_map.reshape(-1)
-    #     pixel_valid = pixel_valid & (rough_flatten > 0.1)
-    #     if angle_valid.sum() > 0:
-    #         geo_loss -= 0.02 * rough_flatten[angle_valid].mean()
-    #     angle_mask = valid & (angle_error_rad >= angle_threshold)
-    #     if angle_mask.sum() > 0:
-    #         geo_loss += 0.05 * rough_flatten[angle_mask].mean()
+    geo_loss = pixel_loss + angle_loss
 
     ncc_scale = scene.ncc_scale
     with torch.no_grad():
@@ -344,54 +327,6 @@ def multi_view_loss(scene, viewpoint_cam, opt, render_pkg, pipe, bg_color):
     Lp = ncc.reshape(-1) * weights
     Lp = Lp[ncc_mask].squeeze()
     ncc_loss = Lp.mean() if ncc_mask.sum() > 0 else 0.0
-
-    # if material_stage:
-        # with torch.no_grad():
-        #     consistent_error = torch.zeros_like(weights) # (N,) valid_indices
-        #     nearby_indices = viewpoint_cam.nearby_indices
-
-        #     for cam_id in nearby_indices:
-        #         view = train_cams[cam_id]
-        #         gray = view.gray_image.cuda()
-        #         gray_vals = F.grid_sample(gray[None], grid.reshape(1, -1, 1, 2), align_corners=True)
-        #         gray_vals = gray_vals.reshape(-1, total_patch_size)
-        #         ncc_error, _ = _loss_ncc(ref_gray_val, gray_vals)
-        #         consistent_error += ncc_error.reshape(-1)
-
-        #     if len(nearby_indices) > 0:
-        #         consistent_error /= len(nearby_indices)
-        #     consistent_error = consistent_error.detach()
-
-        # rough_map = render_pkg["roughness_map"] # (1, H, W)
-        # h_map, w_map = rough_map.squeeze().shape
-        # grid_map = pixels.reshape(-1, 1, 2).float()
-        # grid_map = grid_map.clone()
-        # grid_map[:, :, 0] = 2 * grid_map[:, :, 0] / (w_map - 1.0) - 1.0
-        # grid_map[:, :, 1] = 2 * grid_map[:, :, 1] / (h_map - 1.0) - 1.0
-        # rough_vals = F.grid_sample(rough_map.unsqueeze(1), grid_map.view(1, -1, 1, 2), align_corners=True)
-        # rough_vals = rough_vals.squeeze() # (N,) valid_indices
-
-        # consistent_error = ncc.reshape(-1).detach().pow(0.5)
-        # reflection_threshold = opt.reflection_threshold
-        # increase_mask = (consistent_error <  reflection_threshold) & (rough_vals <  1.00).detach()
-        # decrease_mask = (consistent_error >= reflection_threshold) & (rough_vals >= 0.01).detach()
-
-        # if increase_mask.sum() > 0:
-        #     ncc_loss -= 2e-2 * rough_vals[increase_mask].mean()
-        # if decrease_mask.sum() > 0:
-        #     ncc_loss += 2e-1 * rough_vals[decrease_mask].mean()
-
-        # smooth_mask =  ncc_mask
-        # varied_mask = ~ncc_mask
-        # if varied_mask.sum() > 0:
-        #     ncc_loss += 0.06 * rough_vals[varied_mask].mean()
-        # if smooth_mask.sum() > 0:
-        #     ncc_loss -= 0.01 * rough_vals[smooth_mask].mean()
-
-        # rough_weights = (1.0 - rough_vals).clamp(0.0, 1.0).detach()
-        # pixel_loss = 0.2 * (rough_weights * pixel_noise[valid_indices]).mean() if valid_indices.sum() > 0 else 0.0
-        # angle_loss = 0.2 * (rough_weights * angle_noise[valid_indices]).mean() if valid_indices.sum() > 0 else 0.0
-        # geo_loss = pixel_loss + angle_loss
 
     w_geo = opt.multi_view_geo_weight
     w_ncc = opt.multi_view_ncc_weight

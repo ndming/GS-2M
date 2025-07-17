@@ -93,7 +93,8 @@ def train(model, opt, pipe, test_iterations, save_iterations, checkpoint_iterati
 
         # Render
         render_pkg = render(
-            viewpoint_cam, gaussians, pipe, background, geometry_stage, material_stage, sobel_normal=geometry_stage)
+            viewpoint_cam, gaussians, pipe, background, geometry_stage, material_stage,
+            sobel_normal=geometry_stage, blend_metallic=model.metallic)
         image, visibility_filter, radii = render_pkg["render"], render_pkg["visibility_filter"], render_pkg["radii"]
 
         # D-SSIM loss
@@ -110,7 +111,7 @@ def train(model, opt, pipe, test_iterations, save_iterations, checkpoint_iterati
 
         # Total loss
         loss = opt.lambda_plane * Lplane + opt.lambda_alpha * Lalpha
-        loss += Lrgb if not material_stage else 0.05 * Lssim if iteration <= opt.densify_until_iter else 0.0
+        loss += Lrgb if not material_stage else 0.1 * Lssim if iteration <= opt.densify_until_iter else 0.0
 
         # Geometry losses
         Lgeo = torch.tensor([0.0])
@@ -146,7 +147,7 @@ def train(model, opt, pipe, test_iterations, save_iterations, checkpoint_iterati
             # Smoothness loss
             lambda_smooth = opt.lambda_smooth
             arm = [roughness_map, metallic_map] if model.metallic else [roughness_map]
-            Lsm = tv_loss(render_ref, torch.cat(arm, dim=0))
+            Lsm = tv_loss(render_ref, torch.cat(arm, dim=0)) if iteration <= opt.densify_until_iter else 0.0
 
             lambda_normal = opt.lambda_normal
             weight_normal = (1.0 - roughness_map).clamp(0, 1).detach()
@@ -177,7 +178,7 @@ def train(model, opt, pipe, test_iterations, save_iterations, checkpoint_iterati
             # lambda_tv = opt.lambda_tv_normal # if iteration <= opt.densify_until_iter else 0.15
 
             lambda_rough = opt.lambda_rough
-            Lr = roughness_loss(scene, viewpoint_cam, opt, render_pkg, pipe, background)
+            Lr = roughness_loss(scene, viewpoint_cam, opt, render_pkg, pipe, background) if iteration <= opt.densify_until_iter else 0.0
     
             Lmat = Lpbr + lambda_smooth * Lsm + lambda_normal * Ltv + lambda_rough * Lr # + lambda_envmap * Lenv
             loss += Lmat

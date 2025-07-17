@@ -428,7 +428,6 @@ renderCUDA(
         const float* __restrict__ buffer,
         const float* __restrict__ grad_colors,
         const float* __restrict__ grad_buffer,
-        const float* __restrict__ grad_depth,
         float4* __restrict__ dL_dmeans2D,
         float4* __restrict__ dL_dconics,
         float* __restrict__ dL_dopacities,
@@ -480,18 +479,6 @@ renderCUDA(
 
         for (int i = 0; i < featureCount; i++)
             dL_dbuffer[i] = grad_buffer[i * H * W + pix_id];
-
-        if (featureCount > BOOTSTRAP_FEATURE_END) {
-            // Compute gradients of depth w.r.t. distance and normal
-            // Channel 1: distance, channel 2-5: normals
-            const float3 normal = { buffer[2 * H * W + pix_id], buffer[3 * H * W + pix_id], buffer[4 * H * W + pix_id]};
-            const float distance = buffer[1 * H * W + pix_id];
-            const float tmp = (normal.x * ray.x + normal.y * ray.y + normal.z + 1.0e-8);
-            dL_dbuffer[1] += (-grad_depth[pix_id] / tmp);
-            dL_dbuffer[2] += grad_depth[pix_id] * (distance / (tmp * tmp) * ray.x);
-            dL_dbuffer[3] += grad_depth[pix_id] * (distance / (tmp * tmp) * ray.y);
-            dL_dbuffer[4] += grad_depth[pix_id] * (distance / (tmp * tmp));
-        }
     }
 
     float last_alpha = 0;
@@ -693,7 +680,6 @@ void BACKWARD::render(
     const float* buffer,
     const float* grad_colors,
     const float* grad_buffer,
-    const float* grad_depth,
     float4* dL_dmeans2D,
     float4* dL_dconics,
     float* dL_dopacities,
@@ -716,7 +702,6 @@ void BACKWARD::render(
         buffer,
         grad_colors,
         grad_buffer,
-        grad_depth,
         dL_dmeans2D,
         dL_dconics,
         dL_dopacities,

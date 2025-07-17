@@ -68,7 +68,9 @@ def render_views(model, split, iteration, views, scene, pipeline, background, ar
 
     fusion_depths = []
     for view in tqdm(views, desc="[>] Rendering", ncols=80):
-        render_pkg = render(view, scene.gaussians, pipeline, background, material_stage=True, sobel_normal=args.filter_depth)
+        render_pkg = render(
+            view, scene.gaussians, pipeline, background, material_stage=True,
+            sobel_normal=args.filter_depth, blend_metallic=model.metallic)
         image_stem = view.image_name.rsplit('.', 1)[0]
 
         # GT image

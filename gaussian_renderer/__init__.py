@@ -25,7 +25,8 @@ def render(
         bg_color: torch.Tensor,
         geometry_stage=False,
         material_stage=False,
-        sobel_normal=False):
+        sobel_normal=False,
+        blend_metallic=False):
     """
     Render the scene.
 
@@ -82,14 +83,17 @@ def render(
     cam_normals = normals @ viewpoint_camera.world_view_transform[:3, :3]
     cam_points = means3D @ viewpoint_camera.world_view_transform[:3, :3] + viewpoint_camera.world_view_transform[3, :3]
 
-    feature_count = 10 if material_stage else 5 if geometry_stage else 1
+    feature_count = 9 if material_stage else 5 if geometry_stage else 1
     features = torch.zeros((means3D.shape[0], 10), dtype=torch.float32, device="cuda")
     features[:, 0] = 1.0 # alpha
     features[:, 1] = cam_points[:, 2] if pipe.z_depth else (cam_normals * cam_points).sum(dim=-1).abs() # distance
     features[:, 2:5] = normals # blend normals in world space
     features[:, 5:8] = albedo
     features[:, 8:9] = roughness
-    features[:, 9:10] = metallic
+
+    if blend_metallic:
+        feature_count += 1
+        features[:, 9:10] = metallic
 
     raster_settings = GaussianRasterizationSettings(
         image_height=int(viewpoint_camera.image_height),
@@ -107,7 +111,7 @@ def render(
     rasterizer = GaussianRasterizer(raster_settings=raster_settings)
 
     # Rasterize visible Gaussians to image, obtain their radii (on screen)
-    rendered_image, radii, observe, buffer, _ = rasterizer(
+    rendered_image, radii, observe, buffer = rasterizer(
         means3D=means3D,
         means2D=means2D,
         opacities=opacity,
