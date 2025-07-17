@@ -69,7 +69,7 @@ def _ssim(img1, img2, window, window_size, channel, size_average=True):
     else:
         return ssim_map.mean(1).mean(1).mean(1)
 
-def planar_loss(visibility_filter, gaussians):
+def plane_loss(visibility_filter, gaussians):
     if visibility_filter.sum() == 0:
         return 0.0
     scale = gaussians.get_scaling[visibility_filter]
@@ -174,7 +174,7 @@ def roughness_loss(scene, viewpoint_cam, opt, render_pkg, pipe, bg_color):
         rn_R = nearby_cam.world_view_transform[:3, :3].transpose(-1, -2) @ viewpoint_cam.world_view_transform[:3, :3]
         rn_t = -rn_R @ viewpoint_cam.world_view_transform[3, :3] + nearby_cam.world_view_transform[3, :3]
     
-        ref_local_n = render_pkg["local_map"].permute(1, 2, 0) # (H, W, 3)
+        ref_local_n = render_pkg["local_normal_map"].permute(1, 2, 0) # (H, W, 3)
         ref_local_n = ref_local_n.reshape(-1, 3)[valid_indices] # (N, 3)
         ref_local_d = render_pkg["distance_map"].squeeze() # (H, W)
         ref_local_d = ref_local_d.reshape(-1)[valid_indices] # (N,)
@@ -321,7 +321,7 @@ def multi_view_loss(scene, viewpoint_cam, opt, render_pkg, pipe, bg_color):
         rn_R = nearest_cam.world_view_transform[:3, :3].transpose(-1, -2) @ viewpoint_cam.world_view_transform[:3, :3]
         rn_t = -rn_R @ viewpoint_cam.world_view_transform[3, :3] + nearest_cam.world_view_transform[3, :3]
 
-    ref_local_n = render_pkg["local_map"].permute(1, 2, 0) # (H, W, 3)
+    ref_local_n = render_pkg["local_normal_map"].permute(1, 2, 0) # (H, W, 3)
     ref_local_n = ref_local_n.reshape(-1, 3)[valid_indices] # (N, 3)
     ref_local_d = render_pkg["distance_map"].squeeze() # (H, W)
     ref_local_d = ref_local_d.reshape(-1)[valid_indices] # (N,)

@@ -117,8 +117,8 @@ class OptimizationParams(ParamGroup):
         self.geometry_from_iter = 5000
         self.material_from_iter = 30_000
         self.lambda_alpha = 0.2
-        self.lambda_plane = 50.0
-        self.lambda_depth_normal = 0.03
+        self.lambda_plane = 100.0
+        self.lambda_depth_normal = 0.015
         self.lambda_multi_view = 1.0
         self.lambda_normal = 2.0
         self.lambda_smooth = 0.01
