@@ -28,7 +28,7 @@ import torch.nn.functional as F
 import nvdiffrast.torch as dr
 
 from utils.general_utils import safe_state
-from utils.loss_utils import l1_loss, plane_loss, tv_loss, roughness_loss, multi_view_loss, depth_normal_loss, masked_tv_loss
+from utils.loss_utils import l1_loss, plane_loss, tv_loss, roughness_loss, multi_view_loss, depth_normal_loss, weighted_tv_loss
 from utils.training_utils import prepare_outdir, prepare_logger, report_training
 
 def train(model, opt, pipe, test_iterations, save_iterations, checkpoint_iterations, checkpoint):
@@ -149,7 +149,8 @@ def train(model, opt, pipe, test_iterations, save_iterations, checkpoint_iterati
             Lsm = tv_loss(render_ref, torch.cat(arm, dim=0))
 
             lambda_normal = opt.lambda_normal
-            Ltv = masked_tv_loss(roughness_map.detach() < 0.5, render_ref, render_pkg["normal_map"])
+            weight_normal = (1.0 - roughness_map).clamp(0, 1).detach()
+            Ltv = weighted_tv_loss(render_pkg["normal_map"], render_ref, weight_normal)
 
             # Environment light loss
             # envmap = dr.texture(

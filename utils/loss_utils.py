@@ -556,73 +556,6 @@ def _loss_ncc(ref, nea, std_mask=False):
     else:
         return ncc, torch.sqrt(ref_var) < 0.01
 
-def _bilateral_weighted_ncc(ref, nea, sigma_g=0.1, sigma_x=1.0):
-    """
-    Bilaterally weighted NCC following Schönberger et al. ECCV 2016.
-    
-    Args:
-        ref: reference patches [batch_size, total_patch_size]
-        nea: nearby patches [batch_size, total_patch_size] 
-        sigma_g: grayscale variance parameter (σ_g)
-        sigma_x: spatial variance parameter (σ_x)
-    """
-    bs, tps = nea.shape
-    patch_size = int(np.sqrt(tps))
-    
-    # Reshape to patch format
-    ref = ref.view(bs, patch_size, patch_size)
-    nea = nea.view(bs, patch_size, patch_size)
-    
-    # Create spatial coordinates for Δx_i calculation
-    y_coords, x_coords = torch.meshgrid(
-        torch.arange(patch_size, device=ref.device, dtype=torch.float),
-        torch.arange(patch_size, device=ref.device, dtype=torch.float),
-        indexing='ij'
-    )
-    center = patch_size // 2
-    
-    ncc_values = []
-    
-    for b in range(bs):
-        ref_patch = ref[b]  # w_l in paper notation
-        nea_patch = nea[b]  # w_l^m in paper notation
-        
-        # Center pixel grayscale values (g_l)
-        ref_center = ref_patch[center, center]
-        
-        # Compute Δg_i = |g_i - g_l| (grayscale color distance)
-        delta_g = torch.abs(ref_patch - ref_center)
-        
-        # Compute Δx_i = ||x_i - x_l|| (spatial distance)
-        delta_x = torch.sqrt((x_coords - center)**2 + (y_coords - center)**2)
-        
-        # Per-pixel weights: w_i = exp(-Δg_i²/2σ_g² - Δx_i²/2σ_x²)
-        w = torch.exp(-(delta_g**2)/(2*sigma_g**2) - (delta_x**2)/(2*sigma_x**2))
-        
-        # Weighted averages: E_w(x) = Σ_i w_i x_i / Σ_i w_i
-        w_sum = torch.sum(w)
-        ref_mean = torch.sum(w * ref_patch) / w_sum  # E_w(w_l)
-        nea_mean = torch.sum(w * nea_patch) / w_sum  # E_w(w_l^m)
-        
-        # Weighted covariances following paper's definition
-        # cov_w(x, y) = E_w((x - E_w(x))(y - E_w(y)))
-        ref_centered = ref_patch - ref_mean
-        nea_centered = nea_patch - nea_mean
-        
-        # Cross-covariance: cov_w(w_l, w_l^m)
-        cross_cov = torch.sum(w * ref_centered * nea_centered) / w_sum
-        
-        # Auto-covariances: cov_w(w_l, w_l) and cov_w(w_l^m, w_l^m)
-        ref_var = torch.sum(w * ref_centered * ref_centered) / w_sum
-        nea_var = torch.sum(w * nea_centered * nea_centered) / w_sum
-        
-        # Bilaterally weighted NCC (Equation 9 in paper):
-        # ρ_l^m = cov_w(w_l, w_l^m) / sqrt(cov_w(w_l, w_l) * cov_w(w_l^m, w_l^m))
-        ncc = cross_cov / (torch.sqrt(ref_var * nea_var) + 1e-8)
-        ncc_values.append(ncc)
-    
-    return torch.stack(ncc_values).view(bs, 1)
-
 def tv_loss(gt_image: torch.Tensor, prediction: torch.Tensor, pad=1, step=1):
     # gt_image: (3, H, W), prediction: (C, H, W)
     if pad > 1:
@@ -648,7 +581,7 @@ def tv_loss(gt_image: torch.Tensor, prediction: torch.Tensor, pad=1, step=1):
 
     return tv_loss
 
-def masked_tv_loss(mask: torch.Tensor, gt_image: torch.Tensor, pred: torch.Tensor) -> torch.Tensor:
+def weighted_tv_loss(weight_map: torch.Tensor, gt_image: torch.Tensor, pred: torch.Tensor) -> torch.Tensor:
     rgb_grad_h = torch.exp(-(gt_image[:, 1:, :] - gt_image[:, :-1, :]).abs().mean(dim=0, keepdim=True)) # (1, H-1, W)
     rgb_grad_w = torch.exp(-(gt_image[:, :, 1:] - gt_image[:, :, :-1]).abs().mean(dim=0, keepdim=True)) # (1, H, W-1)
     tv_h = torch.pow(pred[:, 1:, :] - pred[:, :-1, :], 2) # (C, H-1, W)
@@ -667,34 +600,7 @@ def masked_tv_loss(mask: torch.Tensor, gt_image: torch.Tensor, pred: torch.Tenso
 
     return tv_loss
 
-def luminance_loss(img1, img2, mask=None, reduction='mean'):
-    """
-    Computes L1 loss between the luminance channels of two images.
-    Args:
-        img1: Tensor of shape (3, H, W)
-        img2: Tensor of shape (3, H, W)
-        mask: 1 for foreground, 0 for background (1, H, W)
-        reduction: 'mean', 'sum', or 'none'
-    Returns:
-        Scalar loss (if reduction is 'mean' or 'sum'), else tensor of per-pixel loss.
-    """
-    # sRGB luminance weights
-    weights = torch.tensor([0.2126, 0.7152, 0.0722], device=img1.device).view(3, 1, 1)
-    # Compute luminance channels
-    Y1 = (img1 * weights).sum(dim=0, keepdim=True) # (1, H, W)
-    Y2 = (img2 * weights).sum(dim=0, keepdim=True) # (1, H, W)
-    # L1 loss on luminance
-    loss = torch.abs(Y1 - Y2)
-    if mask is not None:
-        loss *= mask.float()
-    if reduction == 'mean':
-        return loss.mean()
-    elif reduction == 'sum':
-        return loss.sum()
-    else:
-        return loss # shape: [1, H, W]
-
-def weighted_tv_loss(gt_image: torch.Tensor, pred: torch.Tensor, weight_map: torch.Tensor=None, pad=1, step=1):
+def weighted_tv_loss2(gt_image: torch.Tensor, pred: torch.Tensor, weight_map: torch.Tensor=None, pad=1, step=1):
     # gt_image: (3, H, W), pred: (C, H, W), weight_map: (1, H, W) with values in [0, 1]
     if pad > 1:
         gt_image = F.avg_pool2d(gt_image, pad, pad)
@@ -736,45 +642,25 @@ def weighted_tv_loss(gt_image: torch.Tensor, pred: torch.Tensor, weight_map: tor
 
     return tv_loss
 
-
-def weighted_tv_loss2(tensor: torch.Tensor, weight_map: torch.Tensor):
+def laplacian_loss(pred: torch.Tensor, gt_image: torch.Tensor, weight_map: torch.Tensor=None) -> torch.Tensor:
     """
-    Computes total variation loss (absolute difference) with multiplicative spatial weights.
-    Works for (C, H, W) tensors and (1, H, W) weight maps.
-    """
-
-    # Compute spatial differences
-    dx = torch.abs(tensor[:, :, 1:] - tensor[:, :, :-1]).sum(dim=0, keepdim=True) # (C, H, W-1)
-    dy = torch.abs(tensor[:, 1:, :] - tensor[:, :-1, :]).sum(dim=0, keepdim=True) # (C, H-1, W)
-
-    # Compute multiplicative weights
-    wx = weight_map[:, :, 1:] * weight_map[:, :, :-1] # (1, H, W-1)
-    wy = weight_map[:, 1:, :] * weight_map[:, :-1, :] # (1, H-1, W)
-
-    # Apply and average
-    loss_x = (dx * wx).mean()
-    loss_y = (dy * wy).mean()
-
-    return loss_x + loss_y
-
-
-def laplacian_loss(tensor: torch.Tensor, weight_map: torch.Tensor = None) -> torch.Tensor:
-    """
-    Laplacian-based smoothness loss.
-    tensor: (C, H, W)
-    weight_map: optional (1, H, W), e.g., (1 - roughness)
+    Edge-aware Laplacian-based smoothness loss.
+    
+    Args:
+        pred: Input tensor of shape (C, H, W) for smoothness.
+        gt_image: Ground truth image of shape (C, H, W) for edge-aware weighting.
+        weight_map: Optional mask tensor of shape (1, H, W).
+        
+    Returns:
+        Computed edge-aware Laplacian loss as a scalar tensor.
     """
 
-    lap = (
-        -4 * tensor
-        + torch.roll(tensor, shifts=1, dims=1)
-        + torch.roll(tensor, shifts=-1, dims=1)
-        + torch.roll(tensor, shifts=1, dims=2)
-        + torch.roll(tensor, shifts=-1, dims=2)
-    )
+    lap = -4 * pred + torch.roll(pred, 1, 1) + torch.roll(pred, -1, 1) + torch.roll(pred, 1, 2) + torch.roll(pred, -1, 2)
 
+    weights = (1.0 - _get_img_grad_weight(gt_image)).clamp(0, 1).detach() ** 2
     if weight_map is not None:
-        return (lap.abs() * weight_map).mean()
-    else:
-        return lap.abs().mean()
+        weights *= weight_map.squeeze()
+
+    loss = (lap.abs() * weights).mean()
+    return loss
 
