@@ -284,7 +284,7 @@ def multi_view_loss(scene, viewpoint_cam, opt, render_pkg, pipe, bg_color):
 
     pixel_loss = (weights * pixel_noise)[pixel_valid].mean() if pixel_valid.sum() > 0 else 0.0
     angle_loss = (weights * angle_noise)[angle_valid].mean() if angle_valid.sum() > 0 else 0.0
-    geo_loss = pixel_loss + angle_loss
+    geo_loss = 0.2 * pixel_loss + angle_loss
 
     # if material_stage:
     #     roughness_map = render_pkg["roughness_map"] # (1, H, W)
@@ -589,15 +589,13 @@ def weighted_tv_loss(weight_map: torch.Tensor, gt_image: torch.Tensor, pred: tor
     # tv_h = (pred[:, 1:, :] - pred[:, :-1, :]).abs() # (C, H-1, W)
     # tv_w = (pred[:, :, 1:] - pred[:, :, :-1]).abs() # (C, H, W-1)
 
-    m = mask.float().detach()
     # if erosion:
     #     kernel = mask.new_ones([7, 7])
     #     mask = kornia.morphology.erosion(mask[None, ...], kernel)[0]
-    mask_h = m[:, 1:, :] * m[:, :-1, :] # (1, H-1, W)
-    mask_w = m[:, :, 1:] * m[:, :, :-1] # (1, H, W-1)
+    w_h = (weight_map[:, 1:, :] + weight_map[:, :-1, :]) / 2.0 # (1, H-1, W)
+    w_w = (weight_map[:, :, 1:] + weight_map[:, :, :-1]) / 2.0 # (1, H, W-1)
 
-    tv_loss = (tv_h * rgb_grad_h * mask_h).mean() + (tv_w * rgb_grad_w * mask_w).mean()
-
+    tv_loss = (tv_h * rgb_grad_h * w_h).mean() + (tv_w * rgb_grad_w * w_w).mean()
     return tv_loss
 
 def weighted_tv_loss2(gt_image: torch.Tensor, pred: torch.Tensor, weight_map: torch.Tensor=None, pad=1, step=1):

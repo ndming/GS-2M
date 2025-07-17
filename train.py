@@ -109,8 +109,8 @@ def train(model, opt, pipe, test_iterations, save_iterations, checkpoint_iterati
         Lalpha = F.binary_cross_entropy(render_pkg["alpha_map"], gt_alpha) if model.white_background or model.mask_gt else 0.0
 
         # Total loss
-        loss = opt.lambda_plane * Lplane + opt.lambda_alpha * Lalpha # + opt.lambda_sparse * Lsparse
-        loss += Lrgb if not material_stage else lambda_ssim * Lssim
+        loss = opt.lambda_plane * Lplane + opt.lambda_alpha * Lalpha
+        loss += Lrgb if not material_stage else 0.05 * Lssim if iteration <= opt.densify_until_iter else 0.0
 
         # Geometry losses
         Lgeo = torch.tensor([0.0])
@@ -150,7 +150,7 @@ def train(model, opt, pipe, test_iterations, save_iterations, checkpoint_iterati
 
             lambda_normal = opt.lambda_normal
             weight_normal = (1.0 - roughness_map).clamp(0, 1).detach()
-            Ltv = weighted_tv_loss(render_pkg["normal_map"], render_ref, weight_normal)
+            Ltv = weighted_tv_loss(weight_normal, render_ref, render_pkg["normal_map"])
 
             # Environment light loss
             # envmap = dr.texture(
