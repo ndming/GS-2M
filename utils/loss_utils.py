@@ -214,8 +214,8 @@ def roughness_loss(scene, viewpoint_cam, opt, render_pkg, pipe, bg_color):
     # reflection_threshold = opt.reflection_threshold
     increase_mask = (ncc_error < 0.0) & (rough_vals <= 0.5).detach()
     decrease_mask = (ncc_error > 0.0) & (rough_vals >= 0.1).detach()
-    rough_mask = increase_mask | decrease_mask
 
+    rough_mask = increase_mask | decrease_mask
     rough_loss = (ncc_error * rough_vals)[rough_mask].mean() if rough_mask.sum() > 0 else 0.0
     # if increase_mask.sum() > 0:
     #     rough_loss -= rough_vals[increase_mask].mean()
@@ -234,7 +234,7 @@ def _patch_gradient(patch, patch_size):
 def _sigmoid(x, k, t):
     return 1.0 / (1.0 + torch.exp(-k * (x - t)))
 
-def multi_view_loss(scene, viewpoint_cam, opt, render_pkg, pipe, bg_color):
+def multi_view_loss(scene, viewpoint_cam, opt, render_pkg, pipe, bg_color, material_stage):
     train_cams = scene.getTrainCameras()
     nearest_indices = viewpoint_cam.nearest_indices
     nearest_cam = None if len(nearest_indices) == 0 else train_cams[random.sample(nearest_indices, 1)[0]]
@@ -271,23 +271,29 @@ def multi_view_loss(scene, viewpoint_cam, opt, render_pkg, pipe, bg_color):
     angle_valid = valid & (angle_error_rad < angle_threshold)
     angle_noise = opt.mv_angle_factor * angle_error_rad
 
-    pixel_valid = valid # & (pixel_noise < 1.0)
-    weights = torch.exp(-pixel_noise * opt.mv_pixel_weight_decay).detach()
-    weights[~pixel_valid] = 0
+    pixel_valid = valid & (pixel_noise < 1.0)
+    geo_weights = torch.exp(-pixel_noise * opt.mv_geo_weight_decay).detach()
+    geo_weights[~pixel_valid] = 0
 
-    pixel_loss = (weights * pixel_noise)[pixel_valid].mean() if pixel_valid.sum() > 0 else 0.0
-    angle_loss = (weights * angle_noise)[angle_valid].mean() if angle_valid.sum() > 0 else 0.0
+    pixel_loss = (geo_weights * pixel_noise)[pixel_valid.detach()].mean() if pixel_valid.sum() > 0 else 0.0
+    angle_loss = (geo_weights * angle_noise)[angle_valid.detach()].mean() if angle_valid.sum() > 0 else 0.0
     geo_loss = pixel_loss + angle_loss
 
     ncc_scale = scene.ncc_scale
     with torch.no_grad():
-        mask = valid.reshape(-1)
+        mask = pixel_valid.reshape(-1)
         valid_indices = torch.arange(mask.shape[0], device=mask.device)[mask]
         if mask.sum() > opt.multi_view_sample_num:
             index = np.random.choice(mask.sum().cpu().numpy(), opt.multi_view_sample_num, replace=False)
-            valid_indices = valid_indices[index]
+            valid_indices = valid_indices[index].detach()
+        
+        ncc_weights = torch.exp(-pixel_noise).detach()
+        ncc_weights[~pixel_valid] = 0
+        ncc_weights = ncc_weights.reshape(-1)[valid_indices]
+        if material_stage:
+            rough_weights = render_pkg["roughness_map"].squeeze().clamp(0, 1).detach() ** 2.0
+            ncc_weights *= rough_weights.reshape(-1)[valid_indices]
 
-        weights = weights.reshape(-1)[valid_indices]
         pixels = scene.pixels.reshape(-1, 2)[valid_indices]
         offsets = _patch_offsets(opt.multi_view_patch_size, pixels.device)
         ori_pixels_patch = pixels.reshape(-1, 1, 2) / ncc_scale + offsets.float()
@@ -324,7 +330,7 @@ def multi_view_loss(scene, viewpoint_cam, opt, render_pkg, pipe, bg_color):
 
     ncc, ncc_mask = _loss_ncc(ref_gray_val, sampled_gray_val)
     ncc_mask = ncc_mask.reshape(-1)
-    Lp = ncc.reshape(-1) * weights
+    Lp = ncc.reshape(-1) * ncc_weights
     Lp = Lp[ncc_mask].squeeze()
     ncc_loss = Lp.mean() if ncc_mask.sum() > 0 else 0.0
 

@@ -126,7 +126,7 @@ class OptimizationParams(ParamGroup):
         self.mv_angle_threshold = 30
         self.mv_angle_factor = 2.0
         self.mv_occlusion_threshold = 5e-4
-        self.mv_pixel_weight_decay = 3.0
+        self.mv_geo_weight_decay = 3.0
         self.reflection_threshold = 1.0
         self.nearby_cam_num = 16
         self.nearby_cam_max_angle = 60

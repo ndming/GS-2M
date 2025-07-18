@@ -302,9 +302,9 @@ if __name__ == "__main__":
         bsdf.inputs['Base Color'].default_value = (0.7, 0.7, 0.7, 1)
         light.energy = 50.0
         if args.debug_anim:
-            scene.render.film_transparent = False
+            scene.render.film_transparent = True
             scene.render.image_settings.file_format = 'PNG'
-            scene.render.image_settings.color_mode = 'RGB'
+            scene.render.image_settings.color_mode = 'RGBA'
             scene.render.image_settings.color_depth = '8'
             scene.render.resolution_x = 600
             scene.render.resolution_y = 600

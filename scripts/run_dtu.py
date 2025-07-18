@@ -13,12 +13,12 @@ if runtime_file.exists():
     with open(runtime_file, 'r') as f:
       runtime_data = json.load(f)
 
-label = f'ours_wo-brdf_geo-0.01_ncc-0.15'
+label = f'ours_wo-brdf_geo-5e-3_ncc-0.15'
 runtimes = []
 for scene in scenes:
     scene_start = time.time()
 
-    common_args = f"-r 2 --multi_view_geo_weight 0.01 --multi_view_ncc_weight 0.15"
+    common_args = f"-r 2 --multi_view_geo_weight 5e-3 --multi_view_ncc_weight 0.15"
     cmd = f'python train.py -s {data_base_path}/scan{scene} -m {out_base_path}/scan{scene} {common_args}'
     print("[>] " + cmd)
     os.system(cmd)
@@ -48,12 +48,12 @@ average_minutes = sum(runtimes) / len(runtimes) / 60
 runtime_data[label] = round(average_minutes, 2)
 
 
-label = f'ours_wo-brdf_geo-0.03_ncc-0.08'
+label = f'ours_wo-brdf_geo-2e-3_ncc-0.15'
 runtimes = []
 for scene in scenes:
     scene_start = time.time()
 
-    common_args = f"-r 2 --multi_view_geo_weight 0.03 --multi_view_ncc_weight 0.08"
+    common_args = f"-r 2 --multi_view_geo_weight 2e-3 --multi_view_ncc_weight 0.15"
     cmd = f'python train.py -s {data_base_path}/scan{scene} -m {out_base_path}/scan{scene} {common_args}'
     print("[>] " + cmd)
     os.system(cmd)
@@ -83,12 +83,12 @@ average_minutes = sum(runtimes) / len(runtimes) / 60
 runtime_data[label] = round(average_minutes, 2)
 
 
-label = f'ours_wo-brdf_mv-0.5'
+label = f'ours_wo-brdf_geo-1e-3_ncc-0.15'
 runtimes = []
 for scene in scenes:
     scene_start = time.time()
 
-    common_args = f"-r 2 --lambda_multi_view 0.5"
+    common_args = f"-r 2 --multi_view_geo_weight 1e-3 --multi_view_ncc_weight 0.15"
     cmd = f'python train.py -s {data_base_path}/scan{scene} -m {out_base_path}/scan{scene} {common_args}'
     print("[>] " + cmd)
     os.system(cmd)
