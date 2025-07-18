@@ -224,6 +224,7 @@ if __name__ == "__main__":
         args.filter_depth = False
         args.extract_mesh = True
         args.skip_test = True
+        args.normal_world = False
 
     if args.tnt:
         tnt_360_scenes = ['barn', 'caterpillar', 'ignatius', 'truck']
@@ -235,6 +236,7 @@ if __name__ == "__main__":
         args.filter_depth = True
         args.extract_mesh = True
         args.skip_test = True
+        args.normal_world = False
 
         voxel_size = 0.002
 
@@ -257,10 +259,14 @@ if __name__ == "__main__":
         args.sdf_trunc = 4.0 * voxel_size
 
     if args.blender:
-        args.extract_mesh = False
         args.skip_train = True
         args.skip_test = False
         args.normal_world = True
+        args.extract_mesh = True
+        args.max_depth = 8.0
+        args.voxel_size = 0.004
+        args.sdf_trunc = 4.0 * args.voxel_size
+        args.num_clusters = 1
 
     with torch.no_grad():
         gaussians = GaussianModel(model.sh_degree)
