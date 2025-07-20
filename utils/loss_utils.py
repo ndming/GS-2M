@@ -213,7 +213,7 @@ def roughness_loss(scene, viewpoint_cam, opt, render_pkg, pipe, bg_color):
     # consistent_error = ncc_error.detach().pow(0.5)
     # reflection_threshold = opt.reflection_threshold
     increase_mask = (ncc_error < 0.0) & (rough_vals <= 0.5).detach()
-    decrease_mask = (ncc_error > 0.0) & (rough_vals >= 0.1).detach()
+    decrease_mask = (ncc_error > 0.0) & (rough_vals > 0.04).detach()
 
     rough_mask = increase_mask | decrease_mask
     rough_loss = (ncc_error * rough_vals)[rough_mask].mean() if rough_mask.sum() > 0 else 0.0
@@ -525,10 +525,10 @@ def tv_loss(gt_image: torch.Tensor, prediction: torch.Tensor, pad=1, step=1):
 def weighted_tv_loss(weight_map: torch.Tensor, gt_image: torch.Tensor, pred: torch.Tensor) -> torch.Tensor:
     rgb_grad_h = torch.exp(-(gt_image[:, 1:, :] - gt_image[:, :-1, :]).abs().mean(dim=0, keepdim=True)) # (1, H-1, W)
     rgb_grad_w = torch.exp(-(gt_image[:, :, 1:] - gt_image[:, :, :-1]).abs().mean(dim=0, keepdim=True)) # (1, H, W-1)
-    tv_h = torch.pow(pred[:, 1:, :] - pred[:, :-1, :], 2) # (C, H-1, W)
-    tv_w = torch.pow(pred[:, :, 1:] - pred[:, :, :-1], 2) # (C, H, W-1)
-    # tv_h = (pred[:, 1:, :] - pred[:, :-1, :]).abs() # (C, H-1, W)
-    # tv_w = (pred[:, :, 1:] - pred[:, :, :-1]).abs() # (C, H, W-1)
+    # tv_h = torch.pow(pred[:, 1:, :] - pred[:, :-1, :], 2) # (C, H-1, W)
+    # tv_w = torch.pow(pred[:, :, 1:] - pred[:, :, :-1], 2) # (C, H, W-1)
+    tv_h = (pred[:, 1:, :] - pred[:, :-1, :]).abs() # (C, H-1, W)
+    tv_w = (pred[:, :, 1:] - pred[:, :, :-1]).abs() # (C, H, W-1)
 
     # if erosion:
     #     kernel = mask.new_ones([7, 7])
