@@ -214,16 +214,20 @@ def readCamerasFromTransforms(path, transformsfile, depth_dir, extension=".png")
             image_path = os.path.join(path, cam_name)
             image_stem = Path(cam_name).stem
             image_name = Path(cam_name).name
+            split = "train" if "train" in cam_name else "test"
 
             image = Image.open(image_path)
             focal = fov2focal(fovx, image.size[0])
 
-            depth_path = os.path.join(depth_dir, f"{image_stem}.png") if depth_dir != "" else ""
+            depth_path = os.path.join(depth_dir, split, f"{image_stem}.png") if depth_dir != "" else ""
             depth = Image.open(depth_path) if depth_path != "" else None
+
+            mask_path = os.path.join(path, split, f"{image_stem}_alpha.png")
+            mask = Image.open(mask_path) if os.path.exists(mask_path) else None
 
             cam_info = CameraInfo(
                 uid=idx, R=R, T=T, Fx=focal, Fy=focal, image=image, image_name=image_name, image_path=image_path,
-                mask=None, depth=depth, width=image.size[0], height=image.size[1])
+                mask=mask, depth=depth, width=image.size[0], height=image.size[1])
             cam_infos.append(cam_info)
 
     return cam_infos

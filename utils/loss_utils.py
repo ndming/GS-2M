@@ -130,6 +130,11 @@ def _get_img_grad_weight(img):
     grad_img = torch.nn.functional.pad(grad_img[None, None], (1, 1, 1, 1), mode='constant', value=0.0).squeeze()
     return grad_img
 
+def alpha_loss(alpha_map, roughness_map, normal_mask):
+    mask = (roughness_map < 0.01) & normal_mask
+    loss = (1.0 - alpha_map[mask.detach()]).mean() if mask.sum() > 0 else 0.0
+    return loss
+
 def roughness_loss(scene, viewpoint_cam, opt, render_pkg, pipe, bg_color):
     nearby_indices = viewpoint_cam.nearby_indices
     nearby_cam = None if len(nearby_indices) == 0 else scene.getTrainCameras()[random.sample(nearby_indices, 1)[0]]

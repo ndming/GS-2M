@@ -260,7 +260,7 @@ if __name__ == "__main__":
     with open(camera_file, 'r') as f:
         views = json.load(f) # an array of camera dicts
 
-    scene, camera, mesh, mat, light = prepare_blender_scene(ply_file, views[0])
+    scene, camera, mesh, mat, light = prepare_blender_scene(ply_file, views[0 if args.render_view_idx < 0 else args.render_view_idx])
     bsdf = mat.node_tree.nodes.get('Principled BSDF')
 
     if args.still:
