@@ -1,30 +1,10 @@
 import os
 import json
 import bpy
-import math
 import mathutils
 
 from argparse import ArgumentParser
 from pathlib import Path
-from PIL import Image
-
-trans_configs = {
-    24: [-2.0, 0.05, 1.2],
-    37: [-1.6, 0.2, 0.6],
-    40: [-1.2, 0.1, 0.7],
-    55: [-1.2, 0.1, 0.8],
-    63: [-0.8, 0.2, 0.6],
-    65: [-1.0, 0.0, 0.6],
-    69: [-1.2, 0.0, 0.8],
-    83: [-1.0, 0.1, 0.6],
-    97: [-0.7, 0.1, 0.3],
-    105: [-0.3, -0.02, 0.1],
-    106: [-1.0, -0.0, 0.8],
-    110: [-1.2, 0.1, 0.8],
-    114: [-1.2, 0.0, 0.8],
-    118: [-1.2, 0.0, 0.8],
-    122: [-1.2, 0.0, 0.8],
-}
 
 def search_for_max_iter(folder):
     saved_iters = [int(fname.split("_")[-1]) for fname in os.listdir(folder)]
@@ -109,7 +89,7 @@ def prepare_blender_scene(ply_file, ref_cam_info):
     area_object.rotation_quaternion = rotation_quat
     area_object.location = camera.location + camera_z_axis * 2.0
 
-    return scene, camera, mesh, mat, area_light
+    return scene, camera, mesh, mat, area_light, area_object
 
 def setup_background(scene, color=(0.0, 0.0, 0.0, 1.0)):
     if not bpy.data.worlds:
@@ -138,72 +118,7 @@ def setup_background(scene, color=(0.0, 0.0, 0.0, 1.0)):
     links.new(bg_node.outputs['Background'], mix_shader.inputs[2])  # Visible BG
     links.new(mix_shader.outputs['Shader'], world_output.inputs['Surface'])
 
-def export_anim(scene, mesh, frame_dir):
-    scene.render.resolution_x = 600
-    scene.render.resolution_y = 600
-    scene.render.film_transparent = True
-    scene.render.image_settings.file_format = 'PNG'
-    scene.render.image_settings.color_mode = 'RGBA'
-    scene.render.image_settings.color_depth = '8'
-
-    num_frames = 120
-
-    # Create rotation animation for object
-    mesh.rotation_mode = 'XYZ'
-    start_rot = mesh.rotation_euler.copy()
-    for frame in range(num_frames):
-        # Oscillate rotation using sine waves
-        angle_x = 0.4 * math.sin(2 * math.pi * frame / num_frames * 1)
-        angle_y = 0.6 * math.sin(2 * math.pi * frame / num_frames * 2)
-
-        mesh.rotation_euler = start_rot.copy()
-        mesh.rotation_euler.x += angle_x
-        mesh.rotation_euler.y += angle_y
-
-        scene.render.filepath = str(frame_dir / f"{frame:03d}.png")
-        bpy.ops.render.render(write_still=True)
-
-
-def convert_gif(frame_dir, gif_file):
-    frames = [Image.open(frame).convert("RGBA") for frame in sorted(frame_dir.glob("*.png")) if frame.is_file()]
-    cleaned_frames = []
-    for frame in frames:
-        new_data = []
-        for r, g, b, a in frame.getdata():
-            if a == 0:
-                new_data.append((0, 0, 0, 0))
-            else:
-                new_data.append((r, g, b, 255))
-        frame.putdata(new_data)
-        cleaned_frames.append(frame)
-
-    palette_source = cleaned_frames[0].convert("RGB").convert("P", palette=Image.ADAPTIVE, colors=255)
-    palette = palette_source.getpalette()
-
-    try:
-        trans_index = next(i for i in range(256) if palette[i*3:i*3+3] == [0, 0, 0])
-    except StopIteration:
-        trans_index = 0
-
-    paletted_images = []
-    for frame in cleaned_frames:
-        alpha = frame.getchannel("A")
-        pal_img = frame.convert("RGB").quantize(palette=palette_source)
-        transparent_mask = alpha.point(lambda a: 255 if a == 0 else 0)
-        pal_img.paste(trans_index, mask=transparent_mask)
-        paletted_images.append(pal_img)
-    
-    paletted_images[0].save(
-        gif_file, save_all=True, append_images=paletted_images[1:], optimize=True,
-        duration=int(1000 / 24), loop=0, transparency=trans_index, disposal=2)
-
-def convert_webp(frame_dir, webp_file):
-    frames = [Image.open(frame).convert("RGBA") for frame in sorted(frame_dir.glob("*.png")) if frame.is_file()]
-    frames[0].save(
-        webp_file, save_all=True, append_images=frames[1:], format='WEBP',
-        duration=int(1000 / 24), loop=0, transparency=0, disposal=2)
-
-def render_images(scene, camera, out_dir, views, resolution_scale, view_idx):
+def render_images(scene, camera, light_object, out_dir, views, resolution_scale, view_idx):
     scene.render.film_transparent = True
     scene.render.image_settings.file_format = 'PNG'
     scene.render.image_settings.color_mode = 'RGBA'
@@ -227,6 +142,12 @@ def render_images(scene, camera, out_dir, views, resolution_scale, view_idx):
         c2w = c2w @ mathutils.Matrix([[1, 0, 0, 0], [0, -1, 0, 0], [0, 0, -1, 0], [0, 0, 0, 1]])
         camera.matrix_world = c2w
 
+        camera_z_axis = c2w.to_3x3() @ mathutils.Vector((0, 0, 1))
+        rotation_quat = mathutils.Vector((0, 0, 1)).rotation_difference(camera_z_axis)
+        light_object.rotation_mode = 'QUATERNION'
+        light_object.rotation_quaternion = rotation_quat
+        light_object.location = camera.location # + camera_z_axis * 2.0
+
         scene.render.resolution_x = w // resolution_scale
         scene.render.resolution_y = h // resolution_scale
         scene.render.filepath = str(render_dir / f"{stem}.png")
@@ -234,25 +155,23 @@ def render_images(scene, camera, out_dir, views, resolution_scale, view_idx):
         bpy.ops.render.render(write_still=True)
 
 if __name__ == "__main__":
-    parser = ArgumentParser(description="Visualize DTU dataset")
+    parser = ArgumentParser(description="Visualize Shiny dataset")
     parser.add_argument("--model", "-m", required=True, type=str)
     parser.add_argument("--res_factor", "-r", default=1, type=int)
+    parser.add_argument("--split", "-s", default="test", type=str)
     parser.add_argument("--iteration", default=-1, type=int)
     parser.add_argument("--label", default="ours", type=str)
-    parser.add_argument("--label_mesh", default="post", type=str)
     parser.add_argument("--rendering", action='store_true')
     parser.add_argument("--render_view_idx", default=-1, type=int)
     parser.add_argument("--animation", action='store_true')
     parser.add_argument("--debug_anim", action='store_true')
-    parser.add_argument("--still", action='store_true')
     args = parser.parse_args()
 
     model_dir = Path(args.model).resolve()
     loaded_iter = search_for_max_iter(str(model_dir / "point_cloud")) if args.iteration == -1 else args.iteration
-    ply_file = model_dir / "train" / f"{args.label}_{loaded_iter}" / "mesh" / f"tsdf_{args.label_mesh}.ply"
-    scanID = int(model_dir.name[4:])
+    ply_file = model_dir / args.split / f"{args.label}_{loaded_iter}" / "mesh" / f"tsdf_post.ply"
 
-    out_dir = model_dir / "train" / f"{args.label}_{loaded_iter}" / "visual"
+    out_dir = model_dir / args.split / f"{args.label}_{loaded_iter}" / "visual"
     os.makedirs(out_dir, exist_ok=True)
 
     # Read camera poses
@@ -260,77 +179,15 @@ if __name__ == "__main__":
     with open(camera_file, 'r') as f:
         views = json.load(f) # an array of camera dicts
 
-    scene, camera, mesh, mat, light = prepare_blender_scene(ply_file, views[0 if args.render_view_idx < 0 else args.render_view_idx])
+    scene, camera, mesh, mat, light, light_object = prepare_blender_scene(ply_file, views[0])
     bsdf = mat.node_tree.nodes.get('Principled BSDF')
-
-    if args.still:
-        scene.render.film_transparent = True
-        scene.render.image_settings.file_format = 'PNG'
-        scene.render.image_settings.color_mode = 'RGBA'
-        scene.render.image_settings.color_depth = '8'
-        scene.render.resolution_x = 600
-        scene.render.resolution_y = 600
-        scene.render.filepath = str(out_dir / "still.png")
-
-        bsdf.inputs['Base Color'].default_value = (0.7, 0.7, 0.7, 1)
-        light.energy = 75.0
-
-        ref_view = views[23]
-        mesh.location += mathutils.Vector(trans_configs[scanID])
-
-        R = ref_view["rotation"]
-        T = ref_view["position"]
-        c2w = mathutils.Matrix(R).to_4x4()
-        c2w.translation = mathutils.Vector(T)
-        c2w = c2w @ mathutils.Matrix([[1, 0, 0, 0], [0, -1, 0, 0], [0, 0, -1, 0], [0, 0, 0, 1]])
-        camera.matrix_world = c2w
-
-        bpy.ops.render.render(write_still=True)
-        mesh.location -= mathutils.Vector(trans_configs[scanID])
-
-    if args.animation:
-        ref_view = views[23]
-        mesh.location += mathutils.Vector(trans_configs[scanID])
-
-        R = ref_view["rotation"]
-        T = ref_view["position"]
-        c2w = mathutils.Matrix(R).to_4x4()
-        c2w.translation = mathutils.Vector(T)
-        c2w = c2w @ mathutils.Matrix([[1, 0, 0, 0], [0, -1, 0, 0], [0, 0, -1, 0], [0, 0, 0, 1]])
-        camera.matrix_world = c2w
-
-        bsdf.inputs['Base Color'].default_value = (0.7, 0.7, 0.7, 1)
-        light.energy = 50.0
-        if args.debug_anim:
-            scene.render.film_transparent = True
-            scene.render.image_settings.file_format = 'PNG'
-            scene.render.image_settings.color_mode = 'RGBA'
-            scene.render.image_settings.color_depth = '8'
-            scene.render.resolution_x = 600
-            scene.render.resolution_y = 600
-            scene.render.filepath = str(out_dir / "anim_debug.png")
-            bpy.ops.render.render(write_still=True)
-        else:
-            frame_dir = out_dir / "frames"
-            os.makedirs(frame_dir, exist_ok=True)
-            export_anim(scene, mesh, frame_dir)
-
-            gif_file = out_dir / f"anim.gif"
-            convert_gif(frame_dir, gif_file)
-            print(f"GIF saved to: {gif_file}")
-
-            webp_file = out_dir / f"anim.webp"
-            convert_webp(frame_dir, webp_file)
-            print(f"WEBP saved to: {webp_file}")
-
-        mesh.location -= mathutils.Vector(trans_configs[scanID])
 
     if args.rendering:
         for link in list(bsdf.inputs['Base Color'].links):
             mat.node_tree.links.remove(link)
         bsdf.inputs['Base Color'].default_value = (0.7, 0.7, 0.7, 1)
-        light.energy = 25.0
-        render_images(scene, camera, out_dir, views, args.res_factor, args.render_view_idx)
+        light.energy = 50.0
+        render_images(scene, camera, light_object, out_dir, views, args.res_factor, args.render_view_idx)
         if args.render_view_idx >= 0:
             print(f"Rendered view {args.render_view_idx} to: {out_dir}")
         else:

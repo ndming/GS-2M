@@ -40,9 +40,10 @@ class Scene:
         self.loaded_iter = None
         self.gaussians = gaussians
 
-        self.brdf_lut = get_brdf_lut().cuda()
-        self.envmap_dirs = get_envmap_dirs()
-        self.cubemap = CubemapLight(base_res=256).cuda()
+        if args.material:
+            self.brdf_lut = get_brdf_lut().cuda()
+            self.envmap_dirs = get_envmap_dirs()
+            self.cubemap = CubemapLight(base_res=512).cuda()
 
         if load_iteration:
             if load_iteration == -1:
@@ -80,8 +81,8 @@ class Scene:
                 json.dump(json_cams, file)
 
         if shuffle:
-            random.shuffle(scene_info.train_cameras) # Multi-res consistent random shuffling
-            random.shuffle(scene_info.test_cameras)  # Multi-res consistent random shuffling
+            random.shuffle(scene_info.train_cameras) # multi-res consistent random shuffling
+            random.shuffle(scene_info.test_cameras)  # multi-res consistent random shuffling
 
         self.cameras_extent = scene_info.nerf_normalization["radius"]
         print(f"[>] Scene half extent: {self.cameras_extent:.4f}")
@@ -96,22 +97,22 @@ class Scene:
 
         if self.loaded_iter:
             load_dir = Path(self.model_path) / f"point_cloud/iteration_{self.loaded_iter}"
-            lighting = torch.load(str(load_dir / "lighting.pth"))
-
             self.gaussians.load_ply(str(load_dir / "point_cloud.ply"))
-            self.cubemap.load_state_dict(lighting['cubemap'])
+
+            if args.material:
+                lighting = torch.load(str(load_dir / "lighting.pth"))
+                self.cubemap.load_state_dict(lighting['cubemap'])
         else:
             self.gaussians.create_from_pcd(scene_info.point_cloud, self.cameras_extent)
 
-    def save(self, iteration):
+    def save(self, iteration, save_lighting=False):
         # point_cloud_path = os.path.join(self.model_path, "point_cloud/iteration_{}".format(iteration))
         save_dir = Path(self.model_path) / f"point_cloud/iteration_{iteration}"
         self.gaussians.save_ply(str(save_dir / "point_cloud.ply"))
 
-        light_dict = {
-            'cubemap': self.cubemap.state_dict(),
-        }
-        torch.save(light_dict, str(save_dir / "lighting.pth"))
+        if save_lighting:
+            light_dict = { 'cubemap': self.cubemap.state_dict() }
+            torch.save(light_dict, str(save_dir / "lighting.pth"))
 
     def getTrainCameras(self, scale=1.0):
         return self.train_cameras[scale]
@@ -134,11 +135,17 @@ class Scene:
         print("[>] Populating gray images")
         self._populate_gray_images(model.mask_gt, resolution_scale)
 
-        self.cubemap.train()
-        param_groups = [
-            { "name": "cubemap", "params": self.cubemap.parameters(), "lr": opt.opacity_lr },
-        ]
-        self.light_optimizer = torch.optim.Adam(param_groups, lr=opt.opacity_lr)
+        ref_camera = self.train_cameras[resolution_scale][0]
+        H, W = ref_camera.image_height, ref_camera.image_width
+        ix, iy = torch.meshgrid(torch.arange(W), torch.arange(H), indexing='xy')
+        self.pixels = torch.stack([ix, iy], dim=-1).float().cuda() # (H, W, 2)
+
+        if model.material:
+            self.cubemap.train()
+            param_groups = [
+                { "name": "cubemap", "params": self.cubemap.parameters(), "lr": opt.opacity_lr },
+            ]
+            self.light_optimizer = torch.optim.Adam(param_groups, lr=opt.opacity_lr)
 
     def _populate_neighbor_cameras(self, opt, resolution_scale):
         world_view_transforms = []
@@ -200,8 +207,8 @@ class Scene:
         ref_camera = self.train_cameras[resolution_scale][0]
         H, W = ref_camera.image_height, ref_camera.image_width
         x, y = torch.meshgrid(torch.arange(W), torch.arange(H), indexing="xy")
-        x = x.flatten() # [H * W]
-        y = y.flatten() # [H * W]
+        x = x.flatten().float() # [H * W]
+        y = y.flatten().float() # [H * W]
         camera_dirs = F.pad(
             torch.stack([(x - ref_camera.Cx + 0.5) / ref_camera.Fx, (y - ref_camera.Cy + 0.5) / ref_camera.Fy], dim=-1),
             (0, 1), value=1.0)

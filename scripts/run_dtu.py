@@ -13,12 +13,12 @@ if runtime_file.exists():
     with open(runtime_file, 'r') as f:
       runtime_data = json.load(f)
 
-label = f'ours_wo-brdf'
+label = f'ours_wo-brdf_geo-5e-3_ncc-0.15'
 runtimes = []
 for scene in scenes:
     scene_start = time.time()
 
-    common_args = f"-r 2"
+    common_args = f"-r 2 --multi_view_geo_weight 5e-3 --multi_view_ncc_weight 0.15"
     cmd = f'python train.py -s {data_base_path}/scan{scene} -m {out_base_path}/scan{scene} {common_args}'
     print("[>] " + cmd)
     os.system(cmd)
@@ -48,12 +48,47 @@ average_minutes = sum(runtimes) / len(runtimes) / 60
 runtime_data[label] = round(average_minutes, 2)
 
 
-label = f'ours'
+label = f'ours_wo-brdf_geo-2e-3_ncc-0.15'
 runtimes = []
 for scene in scenes:
     scene_start = time.time()
 
-    common_args = f"-r 2 --material"
+    common_args = f"-r 2 --multi_view_geo_weight 2e-3 --multi_view_ncc_weight 0.15"
+    cmd = f'python train.py -s {data_base_path}/scan{scene} -m {out_base_path}/scan{scene} {common_args}'
+    print("[>] " + cmd)
+    os.system(cmd)
+
+    common_args = f"--dtu --label {label}"
+    cmd = f'python render.py -m {out_base_path}/scan{scene} {common_args}'
+    print("[>] " + cmd)
+    os.system(cmd)
+
+    scene_time = time.time() - scene_start
+    runtimes.append(scene_time)
+
+    common_args = f"--split train --method {label}_30000"
+    cmd = f"python metrics.py -m {out_base_path}/scan{scene} {common_args}"
+    print("[>] " + cmd)
+    os.system(cmd)
+
+    cmd = f"python scripts/eval_dtu/evaluate_single_scene.py " + \
+          f"--input_ply {out_base_path}/scan{scene}/train/{label}_30000/mesh/tsdf_post.ply " + \
+          f"--ref_dir {data_base_path}/scan{scene} " + \
+          f"--dtu_dir {data_base_path}/Official_DTU_Dataset"
+    print("[>] " + cmd)
+    os.system(cmd)
+    print(f"==> Done with scene: scan{scene} <===\n")
+
+average_minutes = sum(runtimes) / len(runtimes) / 60
+runtime_data[label] = round(average_minutes, 2)
+
+
+label = f'ours_wo-brdf_geo-1e-3_ncc-0.15'
+runtimes = []
+for scene in scenes:
+    scene_start = time.time()
+
+    common_args = f"-r 2 --multi_view_geo_weight 1e-3 --multi_view_ncc_weight 0.15"
     cmd = f'python train.py -s {data_base_path}/scan{scene} -m {out_base_path}/scan{scene} {common_args}'
     print("[>] " + cmd)
     os.system(cmd)

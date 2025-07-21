@@ -12,7 +12,6 @@
 import cv2
 import random
 import torch
-import kornia
 
 import torch.nn.functional as F
 import numpy as np
@@ -70,7 +69,7 @@ def _ssim(img1, img2, window, window_size, channel, size_average=True):
     else:
         return ssim_map.mean(1).mean(1).mean(1)
 
-def planar_loss(visibility_filter, gaussians):
+def plane_loss(visibility_filter, gaussians):
     if visibility_filter.sum() == 0:
         return 0.0
     scale = gaussians.get_scaling[visibility_filter]
@@ -143,14 +142,11 @@ def roughness_loss(scene, viewpoint_cam, opt, render_pkg, pipe, bg_color):
         return 0.0
     
     with torch.no_grad():
-        H, W = render_pkg['depth_map'].squeeze().shape
-        ix, iy = torch.meshgrid(torch.arange(W), torch.arange(H), indexing='xy')
-        pixels = torch.stack([ix, iy], dim=-1).float().to(render_pkg['depth_map'].device)
         pts = _get_points_from_depth(viewpoint_cam, render_pkg['depth_map'])
+        pts_in_nearby_cam = pts @ nearby_cam.world_view_transform[:3, :3] + nearby_cam.world_view_transform[3, :3]
 
         nearby_render_pkg = render(
             nearby_cam, scene.gaussians, pipe, bg_color, geometry_stage=True, material_stage=False, sobel_normal=False)
-        pts_in_nearby_cam = pts @ nearby_cam.world_view_transform[:3, :3] + nearby_cam.world_view_transform[3, :3]
         map_z, _, valid = _sample_depth_normal(pts_in_nearby_cam, nearby_cam, nearby_render_pkg)
         valid = valid & (pts_in_nearby_cam[:, 2] - map_z <= opt.mv_occlusion_threshold)
 
@@ -164,7 +160,7 @@ def roughness_loss(scene, viewpoint_cam, opt, render_pkg, pipe, bg_color):
         if valid_indices.sum() == 0:
             return 0.0
 
-        pixels = pixels.reshape(-1,2)[valid_indices]
+        pixels = scene.pixels.reshape(-1, 2)[valid_indices]
         offsets = _patch_offsets(opt.multi_view_patch_size, pixels.device)
         ori_pixels_patch = pixels.reshape(-1, 1, 2) / ncc_scale + offsets.float()
 
@@ -180,7 +176,7 @@ def roughness_loss(scene, viewpoint_cam, opt, render_pkg, pipe, bg_color):
         rn_R = nearby_cam.world_view_transform[:3, :3].transpose(-1, -2) @ viewpoint_cam.world_view_transform[:3, :3]
         rn_t = -rn_R @ viewpoint_cam.world_view_transform[3, :3] + nearby_cam.world_view_transform[3, :3]
     
-        ref_local_n = render_pkg["normal_map"].permute(1, 2, 0) # (H, W, 3)
+        ref_local_n = render_pkg["local_normal_map"].permute(1, 2, 0) # (H, W, 3)
         ref_local_n = ref_local_n.reshape(-1, 3)[valid_indices] # (N, 3)
         ref_local_d = render_pkg["distance_map"].squeeze() # (H, W)
         ref_local_d = ref_local_d.reshape(-1)[valid_indices] # (N,)
@@ -198,13 +194,21 @@ def roughness_loss(scene, viewpoint_cam, opt, render_pkg, pipe, bg_color):
         sampled_gray_val = F.grid_sample(nearest_image_gray[None], grid.reshape(1, -1, 1, 2), align_corners=True)
         sampled_gray_val = sampled_gray_val.reshape(-1, total_patch_size)
 
-        ncc, _ = _loss_ncc(ref_gray_val, sampled_gray_val)
-        ncc_error = ncc.reshape(-1).detach() # (N,) valid_indices
-        ncc_error = (1.0 - _sigmoid(ncc_error, 4, 0.4)) * ncc_error.sqrt() + _sigmoid(ncc_error, 4, 0.4) * (ncc_error ** 2.5)
+        patch_size = opt.multi_view_patch_size * 2 + 1
+        ref_grad = _patch_gradient(ref_gray_val, patch_size)
+        nea_grad = _patch_gradient(sampled_gray_val, patch_size)
+
+        ncc_grad, _ = _loss_ncc(ref_grad.view(-1, total_patch_size), nea_grad.view(-1, total_patch_size))
+        ncc_gray, std_mask = _loss_ncc(ref_gray_val, sampled_gray_val, std_mask=True)
+        ncc_error = torch.where(std_mask, ncc_grad, ncc_gray)
+        # ncc_error = torch.exp(-ncc_gray * 3.0) * ncc_gray + ncc_grad
+        ncc_error = ncc_error.reshape(-1).detach() # (N,) valid_indices
+        ncc_error = torch.tanh(8.0 * (ncc_error - opt.reflection_threshold))
+        # ncc_error = (1.0 - _sigmoid(ncc_error, 4, 0.4)) * ncc_error.sqrt() + _sigmoid(ncc_error, 4, 0.4) * (ncc_error ** 2.5)
 
     rough_map = render_pkg["roughness_map"] # (1, H, W)
     h_map, w_map = rough_map.squeeze().shape
-    grid_map = pixels.reshape(-1, 1, 2).float()
+    grid_map = pixels.reshape(-1, 1, 2)
     grid_map = grid_map.clone()
     grid_map[:, :, 0] = 2 * grid_map[:, :, 0] / (w_map - 1.0) - 1.0
     grid_map[:, :, 1] = 2 * grid_map[:, :, 1] / (h_map - 1.0) - 1.0
@@ -212,30 +216,35 @@ def roughness_loss(scene, viewpoint_cam, opt, render_pkg, pipe, bg_color):
     rough_vals = rough_vals.squeeze() # (N,) valid_indices
 
     # consistent_error = ncc_error.detach().pow(0.5)
-    reflection_threshold = opt.reflection_threshold
-    increase_mask = (ncc_error <  reflection_threshold) & (rough_vals <  1.00).detach()
-    decrease_mask = (ncc_error >= reflection_threshold) & (rough_vals >= 0.01).detach()
+    # reflection_threshold = opt.reflection_threshold
+    increase_mask = (ncc_error < 0.0) & (rough_vals <= 0.5).detach()
+    decrease_mask = (ncc_error > 0.0) & (rough_vals > 0.08).detach()
 
-    rough_loss = 0.0
-    if increase_mask.sum() > 0:
-        rough_loss -= 0.02 * rough_vals[increase_mask].mean()
-    if decrease_mask.sum() > 0:
-        rough_loss += 0.08 * rough_vals[decrease_mask].mean()
+    rough_mask = increase_mask | decrease_mask
+    rough_loss = (ncc_error * rough_vals)[rough_mask].mean() if rough_mask.sum() > 0 else 0.0
+    # if increase_mask.sum() > 0:
+    #     rough_loss -= rough_vals[increase_mask].mean()
+    # if decrease_mask.sum() > 0:
+    #     rough_loss += rough_vals[decrease_mask].mean()
     return rough_loss
+
+def _patch_gradient(patch, patch_size):
+    patch = patch.view(-1, 1, patch_size, patch_size)
+    sobel_x = torch.tensor([[-1, 0, 1], [-2, 0, 2], [-1, 0, 1]], dtype=patch.dtype, device=patch.device).view(1, 1, 3, 3)
+    sobel_y = sobel_x.transpose(-1, -2)
+    grad_x = F.conv2d(patch, sobel_x, padding=1)
+    grad_y = F.conv2d(patch, sobel_y, padding=1)
+    return torch.sqrt(grad_x ** 2 + grad_y ** 2 + 1e-6)
 
 def _sigmoid(x, k, t):
     return 1.0 / (1.0 + torch.exp(-k * (x - t)))
 
-def multi_view_loss(scene, viewpoint_cam, opt, render_pkg, pipe, bg_color):
+def multi_view_loss(scene, viewpoint_cam, opt, render_pkg, pipe, bg_color, material_stage):
     train_cams = scene.getTrainCameras()
     nearest_indices = viewpoint_cam.nearest_indices
     nearest_cam = None if len(nearest_indices) == 0 else train_cams[random.sample(nearest_indices, 1)[0]]
     if nearest_cam is None:
         return 0.0
-
-    H, W = render_pkg['depth_map'].squeeze().shape # (H, W)
-    ix, iy = torch.meshgrid(torch.arange(W), torch.arange(H), indexing='xy')
-    pixels = torch.stack([ix, iy], dim=-1).float().to(render_pkg['depth_map'].device) # (H, W, 2)
 
     # Render the depth map and normal map from the nearest camera
     nearest_render_pkg = render(
@@ -253,11 +262,11 @@ def multi_view_loss(scene, viewpoint_cam, opt, render_pkg, pipe, bg_color):
     # Use the sampled depth values to reproject the points in the neighbor camera's view to reference camera's view
     re_projections = _reproject_points(nearest_cam, viewpoint_cam, pts_in_nearest_cam, map_z)
     # Calculates the Euclidean distance (pixel_noise) between the original pixel locations and the reprojected ones
-    pixel_noise = torch.norm(re_projections - pixels.reshape(*re_projections.shape), dim=-1)
+    pixel_noise = torch.norm(re_projections - scene.pixels.reshape(*re_projections.shape), dim=-1)
 
     # Sample normals at the pixel locations in the reference camera's view
-    normals = _sample_normal_map(pixels, render_pkg['normal_map']) # (N, 3)
-    normals = normals @ viewpoint_cam.world_view_transform[:3, :3].T
+    normals = _sample_normal_map(scene.pixels, render_pkg['normal_map']) # (N, 3)
+    # normals = normals @ viewpoint_cam.world_view_transform[:3, :3].T
     normals = normals / (normals.norm(dim=1, keepdim=True) + 1e-8)
     # Compute cosine similarity between normals in ref view and sampled normals in neighbor view
     cos_sim = torch.sum(normals * map_n, dim=1) # (N,)
@@ -267,34 +276,30 @@ def multi_view_loss(scene, viewpoint_cam, opt, render_pkg, pipe, bg_color):
     angle_valid = valid & (angle_error_rad < angle_threshold)
     angle_noise = opt.mv_angle_factor * angle_error_rad
 
-    pixel_valid = valid # & (pixel_noise < 1.0)
-    weights = torch.exp(-pixel_noise * opt.mv_pixel_weight_decay).detach()
-    weights[~pixel_valid] = 0
+    pixel_valid = valid & (pixel_noise < 1.0)
+    geo_weights = torch.exp(-pixel_noise * opt.mv_geo_weight_decay).detach()
+    geo_weights[~pixel_valid] = 0
 
-    pixel_loss = (weights * pixel_noise)[pixel_valid].mean() if pixel_valid.sum() > 0 else 0.0
-    angle_loss = (weights * angle_noise)[angle_valid].mean() if angle_valid.sum() > 0 else 0.0
+    pixel_loss = (geo_weights * pixel_noise)[pixel_valid.detach()].mean() if pixel_valid.sum() > 0 else 0.0
+    angle_loss = (geo_weights * angle_noise)[angle_valid.detach()].mean() if angle_valid.sum() > 0 else 0.0
     geo_loss = pixel_loss + angle_loss
-
-    # if material_stage:
-    #     roughness_map = render_pkg["roughness_map"] # (1, H, W)
-    #     rough_flatten = roughness_map.reshape(-1)
-    #     pixel_valid = pixel_valid & (rough_flatten > 0.1)
-    #     if angle_valid.sum() > 0:
-    #         geo_loss -= 0.02 * rough_flatten[angle_valid].mean()
-    #     angle_mask = valid & (angle_error_rad >= angle_threshold)
-    #     if angle_mask.sum() > 0:
-    #         geo_loss += 0.05 * rough_flatten[angle_mask].mean()
 
     ncc_scale = scene.ncc_scale
     with torch.no_grad():
-        mask = valid.reshape(-1)
+        mask = pixel_valid.reshape(-1)
         valid_indices = torch.arange(mask.shape[0], device=mask.device)[mask]
         if mask.sum() > opt.multi_view_sample_num:
             index = np.random.choice(mask.sum().cpu().numpy(), opt.multi_view_sample_num, replace=False)
-            valid_indices = valid_indices[index]
+            valid_indices = valid_indices[index].detach()
+        
+        ncc_weights = torch.exp(-pixel_noise).detach()
+        ncc_weights[~pixel_valid] = 0
+        ncc_weights = ncc_weights.reshape(-1)[valid_indices]
+        if material_stage:
+            rough_weights = render_pkg["roughness_map"].squeeze().clamp(0, 1).detach() ** 2.0
+            ncc_weights *= rough_weights.reshape(-1)[valid_indices]
 
-        weights = weights.reshape(-1)[valid_indices]
-        pixels = pixels.reshape(-1,2)[valid_indices]
+        pixels = scene.pixels.reshape(-1, 2)[valid_indices]
         offsets = _patch_offsets(opt.multi_view_patch_size, pixels.device)
         ori_pixels_patch = pixels.reshape(-1, 1, 2) / ncc_scale + offsets.float()
 
@@ -310,7 +315,7 @@ def multi_view_loss(scene, viewpoint_cam, opt, render_pkg, pipe, bg_color):
         rn_R = nearest_cam.world_view_transform[:3, :3].transpose(-1, -2) @ viewpoint_cam.world_view_transform[:3, :3]
         rn_t = -rn_R @ viewpoint_cam.world_view_transform[3, :3] + nearest_cam.world_view_transform[3, :3]
 
-    ref_local_n = render_pkg["normal_map"].permute(1, 2, 0) # (H, W, 3)
+    ref_local_n = render_pkg["local_normal_map"].permute(1, 2, 0) # (H, W, 3)
     ref_local_n = ref_local_n.reshape(-1, 3)[valid_indices] # (N, 3)
     ref_local_d = render_pkg["distance_map"].squeeze() # (H, W)
     ref_local_d = ref_local_d.reshape(-1)[valid_indices] # (N,)
@@ -330,57 +335,9 @@ def multi_view_loss(scene, viewpoint_cam, opt, render_pkg, pipe, bg_color):
 
     ncc, ncc_mask = _loss_ncc(ref_gray_val, sampled_gray_val)
     ncc_mask = ncc_mask.reshape(-1)
-    Lp = ncc.reshape(-1) * weights
+    Lp = ncc.reshape(-1) * ncc_weights
     Lp = Lp[ncc_mask].squeeze()
     ncc_loss = Lp.mean() if ncc_mask.sum() > 0 else 0.0
-
-    # if material_stage:
-        # with torch.no_grad():
-        #     consistent_error = torch.zeros_like(weights) # (N,) valid_indices
-        #     nearby_indices = viewpoint_cam.nearby_indices
-
-        #     for cam_id in nearby_indices:
-        #         view = train_cams[cam_id]
-        #         gray = view.gray_image.cuda()
-        #         gray_vals = F.grid_sample(gray[None], grid.reshape(1, -1, 1, 2), align_corners=True)
-        #         gray_vals = gray_vals.reshape(-1, total_patch_size)
-        #         ncc_error, _ = _loss_ncc(ref_gray_val, gray_vals)
-        #         consistent_error += ncc_error.reshape(-1)
-
-        #     if len(nearby_indices) > 0:
-        #         consistent_error /= len(nearby_indices)
-        #     consistent_error = consistent_error.detach()
-
-        # rough_map = render_pkg["roughness_map"] # (1, H, W)
-        # h_map, w_map = rough_map.squeeze().shape
-        # grid_map = pixels.reshape(-1, 1, 2).float()
-        # grid_map = grid_map.clone()
-        # grid_map[:, :, 0] = 2 * grid_map[:, :, 0] / (w_map - 1.0) - 1.0
-        # grid_map[:, :, 1] = 2 * grid_map[:, :, 1] / (h_map - 1.0) - 1.0
-        # rough_vals = F.grid_sample(rough_map.unsqueeze(1), grid_map.view(1, -1, 1, 2), align_corners=True)
-        # rough_vals = rough_vals.squeeze() # (N,) valid_indices
-
-        # consistent_error = ncc.reshape(-1).detach().pow(0.5)
-        # reflection_threshold = opt.reflection_threshold
-        # increase_mask = (consistent_error <  reflection_threshold) & (rough_vals <  1.00).detach()
-        # decrease_mask = (consistent_error >= reflection_threshold) & (rough_vals >= 0.01).detach()
-
-        # if increase_mask.sum() > 0:
-        #     ncc_loss -= 2e-2 * rough_vals[increase_mask].mean()
-        # if decrease_mask.sum() > 0:
-        #     ncc_loss += 2e-1 * rough_vals[decrease_mask].mean()
-
-        # smooth_mask =  ncc_mask
-        # varied_mask = ~ncc_mask
-        # if varied_mask.sum() > 0:
-        #     ncc_loss += 0.06 * rough_vals[varied_mask].mean()
-        # if smooth_mask.sum() > 0:
-        #     ncc_loss -= 0.01 * rough_vals[smooth_mask].mean()
-
-        # rough_weights = (1.0 - rough_vals).clamp(0.0, 1.0).detach()
-        # pixel_loss = 0.2 * (rough_weights * pixel_noise[valid_indices]).mean() if valid_indices.sum() > 0 else 0.0
-        # angle_loss = 0.2 * (rough_weights * angle_noise[valid_indices]).mean() if valid_indices.sum() > 0 else 0.0
-        # geo_loss = pixel_loss + angle_loss
 
     w_geo = opt.multi_view_geo_weight
     w_ncc = opt.multi_view_ncc_weight
@@ -445,7 +402,7 @@ def _sample_depth_normal(cam_points, camera, render_pkg, scale=1):
         align_corners=True)[0, :, :, 0].permute(1, 0)
     
     # Rotate normals to world coordinates
-    map_n = map_n @ camera.world_view_transform[:3, :3].T
+    # map_n = map_n @ camera.world_view_transform[:3, :3].T
     map_n = map_n / (map_n.norm(dim=1, keepdim=True) + 1e-8)
 
     return map_z, map_n, valid
@@ -504,7 +461,7 @@ def _patch_warp(H, uv):
     grid = grid_tmp[..., :2] / (grid_tmp[..., 2:] + 1e-10)
     return grid
 
-def _loss_ncc(ref, nea):
+def _loss_ncc(ref, nea, std_mask=False):
     # ref_gray: [batch_size, total_patch_size]
     # nea_grays: [batch_size, total_patch_size]
     bs, tps = nea.shape
@@ -539,74 +496,11 @@ def _loss_ncc(ref, nea):
     ncc = torch.clamp(ncc, 0.0, 2.0)
     ncc = torch.mean(ncc, dim=1, keepdim=True)
     mask = (ncc < 0.9)
-    return ncc, mask
 
-def _bilateral_weighted_ncc(ref, nea, sigma_g=0.1, sigma_x=1.0):
-    """
-    Bilaterally weighted NCC following Schönberger et al. ECCV 2016.
-    
-    Args:
-        ref: reference patches [batch_size, total_patch_size]
-        nea: nearby patches [batch_size, total_patch_size] 
-        sigma_g: grayscale variance parameter (σ_g)
-        sigma_x: spatial variance parameter (σ_x)
-    """
-    bs, tps = nea.shape
-    patch_size = int(np.sqrt(tps))
-    
-    # Reshape to patch format
-    ref = ref.view(bs, patch_size, patch_size)
-    nea = nea.view(bs, patch_size, patch_size)
-    
-    # Create spatial coordinates for Δx_i calculation
-    y_coords, x_coords = torch.meshgrid(
-        torch.arange(patch_size, device=ref.device, dtype=torch.float),
-        torch.arange(patch_size, device=ref.device, dtype=torch.float),
-        indexing='ij'
-    )
-    center = patch_size // 2
-    
-    ncc_values = []
-    
-    for b in range(bs):
-        ref_patch = ref[b]  # w_l in paper notation
-        nea_patch = nea[b]  # w_l^m in paper notation
-        
-        # Center pixel grayscale values (g_l)
-        ref_center = ref_patch[center, center]
-        
-        # Compute Δg_i = |g_i - g_l| (grayscale color distance)
-        delta_g = torch.abs(ref_patch - ref_center)
-        
-        # Compute Δx_i = ||x_i - x_l|| (spatial distance)
-        delta_x = torch.sqrt((x_coords - center)**2 + (y_coords - center)**2)
-        
-        # Per-pixel weights: w_i = exp(-Δg_i²/2σ_g² - Δx_i²/2σ_x²)
-        w = torch.exp(-(delta_g**2)/(2*sigma_g**2) - (delta_x**2)/(2*sigma_x**2))
-        
-        # Weighted averages: E_w(x) = Σ_i w_i x_i / Σ_i w_i
-        w_sum = torch.sum(w)
-        ref_mean = torch.sum(w * ref_patch) / w_sum  # E_w(w_l)
-        nea_mean = torch.sum(w * nea_patch) / w_sum  # E_w(w_l^m)
-        
-        # Weighted covariances following paper's definition
-        # cov_w(x, y) = E_w((x - E_w(x))(y - E_w(y)))
-        ref_centered = ref_patch - ref_mean
-        nea_centered = nea_patch - nea_mean
-        
-        # Cross-covariance: cov_w(w_l, w_l^m)
-        cross_cov = torch.sum(w * ref_centered * nea_centered) / w_sum
-        
-        # Auto-covariances: cov_w(w_l, w_l) and cov_w(w_l^m, w_l^m)
-        ref_var = torch.sum(w * ref_centered * ref_centered) / w_sum
-        nea_var = torch.sum(w * nea_centered * nea_centered) / w_sum
-        
-        # Bilaterally weighted NCC (Equation 9 in paper):
-        # ρ_l^m = cov_w(w_l, w_l^m) / sqrt(cov_w(w_l, w_l) * cov_w(w_l^m, w_l^m))
-        ncc = cross_cov / (torch.sqrt(ref_var * nea_var) + 1e-8)
-        ncc_values.append(ncc)
-    
-    return torch.stack(ncc_values).view(bs, 1)
+    if not std_mask:
+        return ncc, mask
+    else:
+        return ncc, torch.sqrt(ref_var) < 0.01
 
 def tv_loss(gt_image: torch.Tensor, prediction: torch.Tensor, pad=1, step=1):
     # gt_image: (3, H, W), prediction: (C, H, W)
@@ -615,20 +509,16 @@ def tv_loss(gt_image: torch.Tensor, prediction: torch.Tensor, pad=1, step=1):
         prediction = F.avg_pool2d(prediction, pad, pad)
     rgb_grad_h = torch.exp(-(gt_image[:, 1:, :] - gt_image[:, :-1, :]).abs().mean(dim=0, keepdim=True)) # (1, H-1, W)
     rgb_grad_w = torch.exp(-(gt_image[:, :, 1:] - gt_image[:, :, :-1]).abs().mean(dim=0, keepdim=True)) # (1, H-1, W)
-    # tv_h = torch.pow(prediction[:, 1:, :] - prediction[:, :-1, :], 2) # (C, H-1, W)
-    # tv_w = torch.pow(prediction[:, :, 1:] - prediction[:, :, :-1], 2) # (C, H, W-1)
-    tv_h = (prediction[:, 1:, :] - prediction[:, :-1, :]).abs() # (C, H-1, W)
-    tv_w = (prediction[:, :, 1:] - prediction[:, :, :-1]).abs() # (C, H, W-1)
+    tv_h = torch.pow(prediction[:, 1:, :] - prediction[:, :-1, :], 2) # (C, H-1, W)
+    tv_w = torch.pow(prediction[:, :, 1:] - prediction[:, :, :-1], 2) # (C, H, W-1)
+    # tv_h = (prediction[:, 1:, :] - prediction[:, :-1, :]).abs() # (C, H-1, W)
+    # tv_w = (prediction[:, :, 1:] - prediction[:, :, :-1]).abs() # (C, H, W-1)
     tv_loss = (tv_h * rgb_grad_h).mean() + (tv_w * rgb_grad_w).mean()
 
     if step > 1:
         for s in range(2, step + 1):
-            rgb_grad_h = torch.exp(
-                -(gt_image[:, s:, :] - gt_image[:, :-s, :]).abs().mean(dim=0, keepdim=True)
-            )  # [1, H-1, W]
-            rgb_grad_w = torch.exp(
-                -(gt_image[:, :, s:] - gt_image[:, :, :-s]).abs().mean(dim=0, keepdim=True)
-            )  # [1, H-1, W]
+            rgb_grad_h = torch.exp(-(gt_image[:, s:, :] - gt_image[:, :-s, :]).abs().mean(dim=0, keepdim=True)) # (1, H-1, W)
+            rgb_grad_w = torch.exp(-(gt_image[:, :, s:] - gt_image[:, :, :-s]).abs().mean(dim=0, keepdim=True)) # (1, H-1, W)
             # tv_h = torch.pow(prediction[:, s:, :] - prediction[:, :-s, :], 2) # (C, H-1, W)
             # tv_w = torch.pow(prediction[:, :, s:] - prediction[:, :, :-s], 2) # (C, H, W-1)
             tv_h = (prediction[:, s:, :] - prediction[:, :-s, :]).abs() # (C, H-1, W)
@@ -637,59 +527,24 @@ def tv_loss(gt_image: torch.Tensor, prediction: torch.Tensor, pad=1, step=1):
 
     return tv_loss
 
-def masked_tv_loss(
-    mask: torch.Tensor,  # [1, H, W]
-    gt_image: torch.Tensor,  # [3, H, W]
-    prediction: torch.Tensor,  # [C, H, W]
-    erosion: bool = False,
-) -> torch.Tensor:
+def weighted_tv_loss(weight_map: torch.Tensor, gt_image: torch.Tensor, pred: torch.Tensor) -> torch.Tensor:
     rgb_grad_h = torch.exp(-(gt_image[:, 1:, :] - gt_image[:, :-1, :]).abs().mean(dim=0, keepdim=True)) # (1, H-1, W)
     rgb_grad_w = torch.exp(-(gt_image[:, :, 1:] - gt_image[:, :, :-1]).abs().mean(dim=0, keepdim=True)) # (1, H, W-1)
-    # tv_h = torch.pow(prediction[:, 1:, :] - prediction[:, :-1, :], 2) # (C, H-1, W)
-    # tv_w = torch.pow(prediction[:, :, 1:] - prediction[:, :, :-1], 2) # (C, H, W-1)
-    tv_h = (prediction[:, 1:, :] - prediction[:, :-1, :]).abs() # (C, H-1, W)
-    tv_w = (prediction[:, :, 1:] - prediction[:, :, :-1]).abs() # (C, H, W-1)
+    # tv_h = torch.pow(pred[:, 1:, :] - pred[:, :-1, :], 2) # (C, H-1, W)
+    # tv_w = torch.pow(pred[:, :, 1:] - pred[:, :, :-1], 2) # (C, H, W-1)
+    tv_h = (pred[:, 1:, :] - pred[:, :-1, :]).abs() # (C, H-1, W)
+    tv_w = (pred[:, :, 1:] - pred[:, :, :-1]).abs() # (C, H, W-1)
 
-    # erode mask
-    mask = mask.float()
-    if erosion:
-        kernel = mask.new_ones([7, 7])
-        mask = kornia.morphology.erosion(mask[None, ...], kernel)[0]
-    mask_h = mask[:, 1:, :] * mask[:, :-1, :] # (1, H-1, W)
-    mask_w = mask[:, :, 1:] * mask[:, :, :-1] # (1, H, W-1)
+    # if erosion:
+    #     kernel = mask.new_ones([7, 7])
+    #     mask = kornia.morphology.erosion(mask[None, ...], kernel)[0]
+    w_h = (weight_map[:, 1:, :] + weight_map[:, :-1, :]) / 2.0 # (1, H-1, W)
+    w_w = (weight_map[:, :, 1:] + weight_map[:, :, :-1]) / 2.0 # (1, H, W-1)
 
-    tv_loss = (tv_h * rgb_grad_h * mask_h).mean() + (tv_w * rgb_grad_w * mask_w).mean()
-
+    tv_loss = (tv_h * rgb_grad_h * w_h).mean() + (tv_w * rgb_grad_w * w_w).mean()
     return tv_loss
 
-def luminance_loss(img1, img2, mask=None, reduction='mean'):
-    """
-    Computes L1 loss between the luminance channels of two images.
-    Args:
-        img1: Tensor of shape (3, H, W)
-        img2: Tensor of shape (3, H, W)
-        mask: 1 for foreground, 0 for background (1, H, W)
-        reduction: 'mean', 'sum', or 'none'
-    Returns:
-        Scalar loss (if reduction is 'mean' or 'sum'), else tensor of per-pixel loss.
-    """
-    # sRGB luminance weights
-    weights = torch.tensor([0.2126, 0.7152, 0.0722], device=img1.device).view(3, 1, 1)
-    # Compute luminance channels
-    Y1 = (img1 * weights).sum(dim=0, keepdim=True) # (1, H, W)
-    Y2 = (img2 * weights).sum(dim=0, keepdim=True) # (1, H, W)
-    # L1 loss on luminance
-    loss = torch.abs(Y1 - Y2)
-    if mask is not None:
-        loss *= mask.float()
-    if reduction == 'mean':
-        return loss.mean()
-    elif reduction == 'sum':
-        return loss.sum()
-    else:
-        return loss # shape: [1, H, W]
-
-def weighted_tv_loss(gt_image: torch.Tensor, pred: torch.Tensor, weight_map: torch.Tensor=None, pad=1, step=1):
+def weighted_tv_loss2(gt_image: torch.Tensor, pred: torch.Tensor, weight_map: torch.Tensor=None, pad=1, step=1):
     # gt_image: (3, H, W), pred: (C, H, W), weight_map: (1, H, W) with values in [0, 1]
     if pad > 1:
         gt_image = F.avg_pool2d(gt_image, pad, pad)
@@ -697,12 +552,12 @@ def weighted_tv_loss(gt_image: torch.Tensor, pred: torch.Tensor, weight_map: tor
         if weight_map is not None:
             weight_map = F.avg_pool2d(weight_map, pad, pad)
 
-    rgb_grad_h = torch.exp(-(gt_image[:, 1:, :] - gt_image[:, :-1, :]).abs().mean(dim=0, keepdim=True)) # (1, H-1, W)
-    rgb_grad_w = torch.exp(-(gt_image[:, :, 1:] - gt_image[:, :, :-1]).abs().mean(dim=0, keepdim=True)) # (1, H, W-1)
-    # tv_h = torch.pow(pred[:, 1:, :] - pred[:, :-1, :], 2) # (C, H-1, W)
-    # tv_w = torch.pow(pred[:, :, 1:] - pred[:, :, :-1], 2) # (C, H, W-1)
-    tv_h = (pred[:, 1:, :] - pred[:, :-1, :]).abs() # (C, H-1, W)
-    tv_w = (pred[:, :, 1:] - pred[:, :, :-1]).abs() # (C, H, W-1)
+    rgb_grad_h = 1.0 # torch.exp(-(gt_image[:, 1:, :] - gt_image[:, :-1, :]).abs().mean(dim=0, keepdim=True)) # (1, H-1, W)
+    rgb_grad_w = 1.0 # torch.exp(-(gt_image[:, :, 1:] - gt_image[:, :, :-1]).abs().mean(dim=0, keepdim=True)) # (1, H, W-1)
+    tv_h = torch.pow(pred[:, 1:, :] - pred[:, :-1, :], 2) # (C, H-1, W)
+    tv_w = torch.pow(pred[:, :, 1:] - pred[:, :, :-1], 2) # (C, H, W-1)
+    # tv_h = (pred[:, 1:, :] - pred[:, :-1, :]).abs() # (C, H-1, W)
+    # tv_w = (pred[:, :, 1:] - pred[:, :, :-1]).abs() # (C, H, W-1)
 
     if weight_map is not None:
         # Average weights for adjacent pixels along height and width gradients
@@ -731,45 +586,25 @@ def weighted_tv_loss(gt_image: torch.Tensor, pred: torch.Tensor, weight_map: tor
 
     return tv_loss
 
-
-def weighted_tv_loss2(tensor: torch.Tensor, weight_map: torch.Tensor):
+def laplacian_loss(pred: torch.Tensor, gt_image: torch.Tensor, weight_map: torch.Tensor=None) -> torch.Tensor:
     """
-    Computes total variation loss (absolute difference) with multiplicative spatial weights.
-    Works for (C, H, W) tensors and (1, H, W) weight maps.
-    """
-
-    # Compute spatial differences
-    dx = torch.abs(tensor[:, :, 1:] - tensor[:, :, :-1]).sum(dim=0, keepdim=True) # (C, H, W-1)
-    dy = torch.abs(tensor[:, 1:, :] - tensor[:, :-1, :]).sum(dim=0, keepdim=True) # (C, H-1, W)
-
-    # Compute multiplicative weights
-    wx = weight_map[:, :, 1:] * weight_map[:, :, :-1] # (1, H, W-1)
-    wy = weight_map[:, 1:, :] * weight_map[:, :-1, :] # (1, H-1, W)
-
-    # Apply and average
-    loss_x = (dx * wx).mean()
-    loss_y = (dy * wy).mean()
-
-    return loss_x + loss_y
-
-
-def laplacian_loss(tensor: torch.Tensor, weight_map: torch.Tensor = None) -> torch.Tensor:
-    """
-    Laplacian-based smoothness loss.
-    tensor: (C, H, W)
-    weight_map: optional (1, H, W), e.g., (1 - roughness)
+    Edge-aware Laplacian-based smoothness loss.
+    
+    Args:
+        pred: Input tensor of shape (C, H, W) for smoothness.
+        gt_image: Ground truth image of shape (C, H, W) for edge-aware weighting.
+        weight_map: Optional mask tensor of shape (1, H, W).
+        
+    Returns:
+        Computed edge-aware Laplacian loss as a scalar tensor.
     """
 
-    lap = (
-        -4 * tensor
-        + torch.roll(tensor, shifts=1, dims=1)
-        + torch.roll(tensor, shifts=-1, dims=1)
-        + torch.roll(tensor, shifts=1, dims=2)
-        + torch.roll(tensor, shifts=-1, dims=2)
-    )
+    lap = -4 * pred + torch.roll(pred, 1, 1) + torch.roll(pred, -1, 1) + torch.roll(pred, 1, 2) + torch.roll(pred, -1, 2)
 
+    weights = (1.0 - _get_img_grad_weight(gt_image)).clamp(0, 1).detach() ** 2
     if weight_map is not None:
-        return (lap.abs() * weight_map).mean()
-    else:
-        return lap.abs().mean()
+        weights *= weight_map.squeeze()
+
+    loss = (lap.abs() * weights).mean()
+    return loss
 

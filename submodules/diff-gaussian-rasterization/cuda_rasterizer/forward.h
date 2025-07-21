@@ -52,8 +52,6 @@ namespace FORWARD {
         const uint2* ranges,
         const uint32_t* indices,
         int W, int H,
-        float focal_x, float focal_y,
-        float cx, float cy,
         const float* viewmatrix,
         const float* cam_pos,
         const float2* img_points,
@@ -66,8 +64,7 @@ namespace FORWARD {
         int featureCount,
         float* out_colors,
         int* out_observe,
-        float* out_buffer,
-        float* out_depth);
+        float* out_buffer);
 }
 
 #endif

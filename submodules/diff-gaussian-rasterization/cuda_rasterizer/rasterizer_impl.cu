@@ -208,8 +208,7 @@ int CudaRasterizer::Rasterizer::forward(
         float* out_colors,
         int* out_radii,
         int* out_observe,
-        float* out_buffer,
-        float* out_depth) {
+        float* out_buffer) {
     const float focal_y = height / (2.0f * tan_fovy);
     const float focal_x = width / (2.0f * tan_fovx);
 
@@ -313,8 +312,6 @@ int CudaRasterizer::Rasterizer::forward(
         imgState.ranges,
         binningState.point_list,
         width, height,
-        focal_x, focal_y,
-        float(width * 0.5f), float(height * 0.5f),
         viewmatrix,
         cam_pos,
         geomState.means2D,
@@ -327,8 +324,7 @@ int CudaRasterizer::Rasterizer::forward(
         featureCount,
         out_colors,
         out_observe,
-        out_buffer,
-        out_depth);
+        out_buffer);
 
     return num_rendered;
 }
@@ -360,7 +356,6 @@ void CudaRasterizer::Rasterizer::backward(
         const int featureCount,
         const float* grad_colors,
         const float* grad_buffer,
-        const float* grad_depth,
         float* dL_dmeans2D,
         float* dL_dconics,
         float* dL_dopacities,
@@ -407,7 +402,6 @@ void CudaRasterizer::Rasterizer::backward(
         buffer,
         grad_colors,
         grad_buffer,
-        grad_depth,
         (float4*)dL_dmeans2D,
         (float4*)dL_dconics,
         dL_dopacities,

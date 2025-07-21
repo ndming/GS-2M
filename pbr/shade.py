@@ -149,7 +149,7 @@ def pbr_shading(
 
     results = {}
     # prepare
-    ref_dirs = (2.0 * (normals * view_dirs).sum(-1, keepdims=True).clamp(min=0.0) * normals - view_dirs) # (1, H, W, 3)
+    ref_dirs = 2.0 * (normals * view_dirs).sum(-1, keepdims=True).clamp(min=0.0) * normals - view_dirs # (1, H, W, 3)
 
     # Diffuse lookup
     diffuse_light = dr.texture(

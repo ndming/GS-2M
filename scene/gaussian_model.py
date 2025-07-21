@@ -522,7 +522,7 @@ class GaussianModel:
         prune_filter = torch.cat((selected_pts_mask, torch.zeros(N * selected_pts_mask.sum(), device="cuda", dtype=bool)))
         self.prune_points(prune_filter)
 
-    def densify_and_clone(self, grads, grad_threshold, scene_extent, geometry_stage):
+    def densify_and_clone(self, grads, grad_threshold, scene_extent):
         # Extract points that satisfy the gradient condition
         selected_pts_mask = torch.where(torch.norm(grads, dim=-1) >= grad_threshold, True, False)
         selected_pts_mask = torch.logical_and(
@@ -540,21 +540,18 @@ class GaussianModel:
         new_roughness = self._roughness[selected_pts_mask]
         new_metallic = self._metallic[selected_pts_mask]
 
-        if geometry_stage:
-            new_xyz += self.xyz_gradient_accum[selected_pts_mask] / self.denom[selected_pts_mask]
-
         self.densification_postfix(
             new_xyz, new_features_dc, new_features_rest, new_opacities, new_scaling, new_rotation,
             new_albedo, new_roughness, new_metallic)
 
-    def densify_and_prune(self, max_grad, max_grad_abs, min_opacity, extent, max_screen_size=None, geometry_stage=False):
+    def densify_and_prune(self, max_grad, max_grad_abs, min_opacity, extent, max_screen_size=None):
         grads = self.xyz_gradient_accum / self.denom
         grads[grads.isnan()] = 0.0
 
         grads_abs = self.xyz_gradient_accum_abs / self.denom
         grads_abs[grads_abs.isnan()] = 0.0
 
-        self.densify_and_clone(grads, max_grad, extent, geometry_stage)
+        self.densify_and_clone(grads, max_grad, extent)
         self.densify_and_split(grads_abs, max_grad_abs, extent)
 
         # Remove transparent Gaussians

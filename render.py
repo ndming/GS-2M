@@ -48,11 +48,11 @@ def render_views(model, split, iteration, views, scene, pipeline, background, ar
     os.makedirs(normal_dir, exist_ok=True)
     os.makedirs(depth_dir, exist_ok=True)
 
-    scene.cubemap.build_mips()
-    canonical_rays = scene.get_canonical_rays()
-
     # Environment map
     if model.material:
+        scene.cubemap.build_mips()
+        canonical_rays = F.normalize(scene.get_canonical_rays(), p=2, dim=-1)
+
         envmap = scene.cubemap.export_envmap(return_img=True).permute(2, 0, 1).clamp(0.0, 1.0) # (3, H, W)
         torchvision.utils.save_image(envmap, model_dir / split / f"{args.label}_{iteration}" / "envmap.png")
 
@@ -68,7 +68,9 @@ def render_views(model, split, iteration, views, scene, pipeline, background, ar
 
     fusion_depths = []
     for view in tqdm(views, desc="[>] Rendering", ncols=80):
-        render_pkg = render(view, scene.gaussians, pipeline, background, material_stage=True, sobel_normal=args.filter_depth)
+        render_pkg = render(
+            view, scene.gaussians, pipeline, background, material_stage=True,
+            sobel_normal=args.filter_depth, blend_metallic=model.metallic)
         image_stem = view.image_name.rsplit('.', 1)[0]
 
         # GT image
@@ -106,7 +108,7 @@ def render_views(model, split, iteration, views, scene, pipeline, background, ar
             # PBR render
             pbr_pkg = pbr_render(scene, view, canonical_rays, render_pkg, model.metallic, model.gamma)
             pbr_image = pbr_pkg["render_rgb"].clamp(0.0, 1.0).permute(2, 0, 1) # (3, H, W)
-            pbr_mask = view.alpha_mask.cuda() > 0.5 if model.mask_gt or model.white_background else pbr_pkg["normal_mask"]
+            pbr_mask = view.alpha_mask.cuda() > 0.5 if model.mask_gt or model.white_background else render_pkg["normal_mask"]
             bg_color = 0.0 if model.mask_gt else background[:, None, None]
             pbr_image = torch.where(pbr_mask, pbr_image, bg_color)
             torchvision.utils.save_image(pbr_image, render_dir / f"{image_stem}.png")
@@ -131,6 +133,8 @@ def render_views(model, split, iteration, views, scene, pipeline, background, ar
             os.makedirs(albedo_dir, exist_ok=True)
             os.makedirs(roughness_dir, exist_ok=True)
             os.makedirs(metallic_dir, exist_ok=True)
+            os.makedirs(diffuse_dir, exist_ok=True)
+            os.makedirs(specular_dir, exist_ok=True)
 
             if model.white_background:
                 map_to_rgba(albedo_map, view.alpha_mask).save(albedo_dir / f"{image_stem}.png")
@@ -220,6 +224,7 @@ if __name__ == "__main__":
         args.filter_depth = False
         args.extract_mesh = True
         args.skip_test = True
+        args.normal_world = False
 
     if args.tnt:
         tnt_360_scenes = ['barn', 'caterpillar', 'ignatius', 'truck']
@@ -231,6 +236,7 @@ if __name__ == "__main__":
         args.filter_depth = True
         args.extract_mesh = True
         args.skip_test = True
+        args.normal_world = False
 
         voxel_size = 0.002
 
@@ -253,15 +259,20 @@ if __name__ == "__main__":
         args.sdf_trunc = 4.0 * voxel_size
 
     if args.blender:
-        args.extract_mesh = False
         args.skip_train = True
         args.skip_test = False
         args.normal_world = True
+        args.extract_mesh = True
+        args.max_depth = 8.0
+        args.voxel_size = 0.004
+        args.sdf_trunc = 4.0 * args.voxel_size
+        args.num_clusters = 1
 
     with torch.no_grad():
         gaussians = GaussianModel(model.sh_degree)
         scene = Scene(model, gaussians, load_iteration=args.iteration, shuffle=False)
-        scene.cubemap.eval()
+        if model.material:
+            scene.cubemap.eval()
 
         bg_color = [1, 1, 1] if model.white_background else [0, 0, 0]
         background = torch.tensor(bg_color, dtype=torch.float32, device="cuda")

@@ -50,8 +50,7 @@ namespace CudaRasterizer {
             float* out_colors,
             int* out_radii,
             int* out_observe,
-            float* out_buffer,
-            float* out_depth);
+            float* out_buffer);
 
         static void backward(
             int P, int D, int M, int R,
@@ -78,7 +77,6 @@ namespace CudaRasterizer {
             int featureCount,
             const float* grad_colors,
             const float* grad_buffer,
-            const float* grad_depth,
             float* dL_dmeans2D,
             float* dL_dconics,
             float* dL_dopacities,

@@ -102,15 +102,10 @@ class OptimizationParams(ParamGroup):
         self.opacity_reduce_interval = 500
         self.prune_init_points = True
         self.radii2D_threshold = 20
-        # GaussianShader
-        self.lambda_sparse = 0.001
-        self.use_sparse_loss = True
         # PGSR
-        self.lambda_planar = 100.0
-        self.lambda_depth_normal = 0.03
         self.multi_view_num = 8
         self.multi_view_ncc_weight = 0.15
-        self.multi_view_geo_weight = 0.03
+        self.multi_view_geo_weight = 1e-3
         self.multi_view_ncc_scale = -1.0
         self.multi_view_max_angle = 30
         self.multi_view_min_dist = 0.01
@@ -118,19 +113,21 @@ class OptimizationParams(ParamGroup):
         self.use_multi_view_trim = True
         self.multi_view_sample_num = 102400
         self.multi_view_patch_size = 3
-        # GS-IR/GS-ROR
-        # self.lambda_tv_normal = 2.0
-        self.lambda_smooth = 2.0
-        self.lambda_roughness = 0.15
         # Ours
         self.geometry_from_iter = 5000
         self.material_from_iter = 30_000
+        self.lambda_alpha = 0.2
+        self.lambda_plane = 100.0
+        self.lambda_depth_normal = 0.03
+        self.lambda_multi_view = 1.0
+        self.lambda_normal = 2.5
+        self.lambda_smooth = 0.01
+        self.lambda_rough = 1e-4
         self.mv_angle_threshold = 30
         self.mv_angle_factor = 2.0
         self.mv_occlusion_threshold = 5e-4
-        self.mv_pixel_weight_decay = 3.0
-        self.lambda_multi_view = 1.0
-        self.reflection_threshold = 0.3
+        self.mv_geo_weight_decay = 3.0
+        self.reflection_threshold = 1.0
         self.nearby_cam_num = 16
         self.nearby_cam_max_angle = 60
         self.nearby_cam_min_angle = 10

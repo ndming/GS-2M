@@ -36,7 +36,6 @@ namespace BACKWARD
         const float* buffer,
         const float* grad_colors,
         const float* grad_buffer,
-        const float* grad_depth,
         float4* dL_dmeans2D,
         float4* dL_dconics,
         float* dL_dopacities,
