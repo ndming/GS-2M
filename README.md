@@ -51,6 +51,9 @@ python train.py -s /path/to/scene -m /path/to/model/directory
 <details>
 <summary><span style="font-weight: bold;">Additional settings to change the behavior of train.py</span></summary>
 
+- `--material`: enable material decomposition as part of training, default to `False`
+- `--reflection_threshold`: control how sensitive multi-view photometric variations to the detection of smooth surfaces
+- `--lambda_smooth`: if there are not enough reflection clues, increase this number to propagate correctly identified roughness
 - `-r`: downscale input images, recommended for high resolution training data (more than 1k6 pixels width/height).
 For example, `-r 2` will train with images at half the resolution of the original. 
 - `--masks`: the name of the directory containing masks of foreground object. For the directory structure shown above,
@@ -60,7 +63,6 @@ they both co-exist.
 - `--mask_gt`: even with `--masks` or the alpha channel from input images, training would still perform with unmasked RGB
 as GT. To mask them out and fit Gaussians to the foreground object only, add this option. This is especially useful for
 reconstructing objects from scenes with overwhelming background.
-- `--metallic`: when specified, the optimization process will use the full metallic shading model, default to `False`.
 
 </details>
 
