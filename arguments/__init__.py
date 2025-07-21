@@ -120,7 +120,7 @@ class OptimizationParams(ParamGroup):
         self.lambda_plane = 100.0
         self.lambda_depth_normal = 0.03
         self.lambda_multi_view = 1.0
-        self.lambda_normal = 0.3
+        self.lambda_normal = 2.5
         self.lambda_smooth = 0.01
         self.lambda_rough = 1e-4
         self.mv_angle_threshold = 30

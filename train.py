@@ -151,7 +151,8 @@ def train(model, opt, pipe, test_iterations, save_iterations, checkpoint_iterati
             Lsm = tv_loss(render_ref, torch.cat(arm, dim=0)) # if iteration <= opt.densify_until_iter else 0.0
 
             lambda_normal = opt.lambda_normal
-            weight_normal = (1.0 - roughness_map).clamp(0, 1).detach()
+            weight_normal = (1.0 - roughness_map).detach()
+            weight_normal = (0.5 * torch.tanh(8.0 * (weight_normal - 0.5)) + 0.5).clamp(0, 1)
             Ltv = weighted_tv_loss(weight_normal, render_ref, render_pkg["normal_map"])
 
             # Environment light loss
