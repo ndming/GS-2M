@@ -70,7 +70,7 @@ def render_views(model, split, iteration, views, scene, pipeline, background, ar
     for view in tqdm(views, desc="[>] Rendering", ncols=80):
         render_pkg = render(
             view, scene.gaussians, pipeline, background, material_stage=True,
-            sobel_normal=args.filter_depth, blend_metallic=model.metallic)
+            sobel_normal=args.filter_depth or args.normal_sobel, blend_metallic=model.metallic)
         image_stem = view.image_name.rsplit('.', 1)[0]
 
         # GT image
@@ -80,7 +80,8 @@ def render_views(model, split, iteration, views, scene, pipeline, background, ar
         torchvision.utils.save_image(gt_image, gt_dir / f"{image_stem}.png")
 
         # Normals
-        normal = convert_normal_for_save(render_pkg["normal_map"], view, args.normal_world).cpu() # (3, H, W)
+        normal_map = render_pkg["sobel_map"] if args.normal_sobel else render_pkg["normal_map"]
+        normal = convert_normal_for_save(normal_map, view, args.normal_world).cpu() # (3, H, W)
         if model.white_background:
             map_to_rgba(normal, view.alpha_mask).save(normal_dir / f"{image_stem}.png")
         else:
@@ -202,6 +203,7 @@ if __name__ == "__main__":
     parser.add_argument("--tnt", action="store_true", help="Tailor the rendering for the TnT dataset")
     parser.add_argument("--blender", action="store_true", help="Tailor the rendering for Blender scenes")
     parser.add_argument("--normal_world", action="store_true", help="Save normals in world space, defaults to camera space")
+    parser.add_argument("--normal_sobel", action="store_true", help="Use normal estimated from depths")
 
     args = get_combined_args(parser)
     print(f"[>] Rendering {args.model_path}")

@@ -5,6 +5,7 @@ import mathutils
 
 from argparse import ArgumentParser
 from pathlib import Path
+from PIL import Image
 
 def search_for_max_iter(folder):
     saved_iters = [int(fname.split("_")[-1]) for fname in os.listdir(folder)]
@@ -154,6 +155,73 @@ def render_images(scene, camera, light_object, out_dir, views, resolution_scale,
 
         bpy.ops.render.render(write_still=True)
 
+def export_anim(scene, views, camera, light_object, frame_dir):
+    scene.render.resolution_x = 600
+    scene.render.resolution_y = 600
+    scene.render.film_transparent = True
+    scene.render.image_settings.file_format = 'PNG'
+    scene.render.image_settings.color_mode = 'RGBA'
+    scene.render.image_settings.color_depth = '8'
+
+    for idx, view in enumerate(views):
+
+        R = view["rotation"]
+        T = view["position"]
+        c2w = mathutils.Matrix(R).to_4x4()
+        c2w.translation = mathutils.Vector(T)
+        c2w = c2w @ mathutils.Matrix([[1, 0, 0, 0], [0, -1, 0, 0], [0, 0, -1, 0], [0, 0, 0, 1]])
+        camera.matrix_world = c2w
+
+        camera_z_axis = c2w.to_3x3() @ mathutils.Vector((0, 0, 1))
+        rotation_quat = mathutils.Vector((0, 0, 1)).rotation_difference(camera_z_axis)
+        light_object.rotation_mode = 'QUATERNION'
+        light_object.rotation_quaternion = rotation_quat
+        light_object.location = camera.location
+
+        scene.render.filepath = str(frame_dir / f"{idx:03d}.png")
+        bpy.ops.render.render(write_still=True)
+
+
+def convert_gif(frame_dir, gif_file, frame_count=200):
+    frames = [Image.open(frame).convert("RGBA") for frame in sorted(frame_dir.glob("*.png")) if frame.is_file()]
+    cleaned_frames = []
+    for frame in frames[:frame_count]:
+        new_data = []
+        for r, g, b, a in frame.getdata():
+            if a == 0:
+                new_data.append((0, 0, 0, 0))
+            else:
+                new_data.append((r, g, b, 255))
+        frame.putdata(new_data)
+        cleaned_frames.append(frame)
+
+    palette_source = cleaned_frames[0].convert("RGB").convert("P", palette=Image.ADAPTIVE, colors=255)
+    palette = palette_source.getpalette()
+
+    try:
+        trans_index = next(i for i in range(256) if palette[i*3:i*3+3] == [0, 0, 0])
+    except StopIteration:
+        trans_index = 0
+
+    paletted_images = []
+    for frame in cleaned_frames:
+        alpha = frame.getchannel("A")
+        pal_img = frame.convert("RGB").quantize(palette=palette_source)
+        transparent_mask = alpha.point(lambda a: 255 if a == 0 else 0)
+        pal_img.paste(trans_index, mask=transparent_mask)
+        paletted_images.append(pal_img)
+    
+    paletted_images[0].save(
+        gif_file, save_all=True, append_images=paletted_images[1:], optimize=True,
+        duration=int(1000 / 24), loop=0, transparency=trans_index, disposal=2)
+
+def convert_webp(frame_dir, webp_file, frame_count=200):
+    frames = [Image.open(frame).convert("RGBA") for frame in sorted(frame_dir.glob("*.png")) if frame.is_file()]
+    frames = frames[:frame_count]
+    frames[0].save(
+        webp_file, save_all=True, append_images=frames[1:], format='WEBP',
+        duration=int(1000 / 24), loop=0, transparency=0, disposal=2)
+
 if __name__ == "__main__":
     parser = ArgumentParser(description="Visualize Shiny dataset")
     parser.add_argument("--model", "-m", required=True, type=str)
@@ -181,6 +249,40 @@ if __name__ == "__main__":
 
     scene, camera, mesh, mat, light, light_object = prepare_blender_scene(ply_file, views[0])
     bsdf = mat.node_tree.nodes.get('Principled BSDF')
+
+    if args.animation:
+        bsdf.inputs['Base Color'].default_value = (0.7, 0.7, 0.7, 1)
+        light.energy = 50.0
+        if args.debug_anim:
+            ref_view = views[0]
+
+            R = ref_view["rotation"]
+            T = ref_view["position"]
+            c2w = mathutils.Matrix(R).to_4x4()
+            c2w.translation = mathutils.Vector(T)
+            c2w = c2w @ mathutils.Matrix([[1, 0, 0, 0], [0, -1, 0, 0], [0, 0, -1, 0], [0, 0, 0, 1]])
+            camera.matrix_world = c2w
+
+            scene.render.film_transparent = True
+            scene.render.image_settings.file_format = 'PNG'
+            scene.render.image_settings.color_mode = 'RGBA'
+            scene.render.image_settings.color_depth = '8'
+            scene.render.resolution_x = 600
+            scene.render.resolution_y = 600
+            scene.render.filepath = str(out_dir / "anim_debug.png")
+            bpy.ops.render.render(write_still=True)
+        else:
+            frame_dir = out_dir / "frames"
+            os.makedirs(frame_dir, exist_ok=True)
+            export_anim(scene, views, camera, light_object, frame_dir)
+
+            gif_file = out_dir / f"anim.gif"
+            convert_gif(frame_dir, gif_file)
+            print(f"GIF saved to: {gif_file}")
+
+            webp_file = out_dir / f"anim.webp"
+            convert_webp(frame_dir, webp_file)
+            print(f"WEBP saved to: {webp_file}")
 
     if args.rendering:
         for link in list(bsdf.inputs['Base Color'].links):

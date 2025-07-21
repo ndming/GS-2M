@@ -53,7 +53,8 @@ python train.py -s /path/to/scene -m /path/to/model/directory
 
 - `--material`: enable material decomposition as part of training, default to `False`
 - `--reflection_threshold`: control how sensitive multi-view photometric variations to the detection of smooth surfaces
-- `--lambda_smooth`: if there are not enough reflection clues, increase this number to propagate correctly identified roughness
+- `--lambda_smooth`: if there are not enough reflection clues, increase this parameter to propagate correctly identified roughness
+- `--lambda_normal`: if the reconstructed mesh is not water-tight, increase this parameter to fill the gaps
 - `-r`: downscale input images, recommended for high resolution training data (more than 1k6 pixels width/height).
 For example, `-r 2` will train with images at half the resolution of the original. 
 - `--masks`: the name of the directory containing masks of foreground object. For the directory structure shown above,
