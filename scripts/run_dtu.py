@@ -13,12 +13,12 @@ if runtime_file.exists():
     with open(runtime_file, 'r') as f:
       runtime_data = json.load(f)
 
-label = f'ours_wo-brdf_geo-2e-3_dn-0.03'
+label = f'ours_wo-brdf'
 runtimes = []
 for scene in scenes:
     scene_start = time.time()
 
-    common_args = f"-r 2 --multi_view_geo_weight 2e-3 --lambda_depth_normal 0.03"
+    common_args = f"-r 2 --lambda_depth_normal 0.015"
     cmd = f'python train.py -s {data_base_path}/scan{scene} -m {out_base_path}/scan{scene} {common_args}'
     print("[>] " + cmd)
     os.system(cmd)
@@ -48,12 +48,12 @@ average_minutes = sum(runtimes) / len(runtimes) / 60
 runtime_data[label] = round(average_minutes, 2)
 
 
-label = f'ours_wo-brdf_geo-1e-3_dn-0.03'
+label = f'ours'
 runtimes = []
 for scene in scenes:
     scene_start = time.time()
 
-    common_args = f"-r 2 --multi_view_geo_weight 1e-3 --lambda_depth_normal 0.03"
+    common_args = f"-r 2 --material"
     cmd = f'python train.py -s {data_base_path}/scan{scene} -m {out_base_path}/scan{scene} {common_args}'
     print("[>] " + cmd)
     os.system(cmd)
