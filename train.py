@@ -122,7 +122,7 @@ def train(model, opt, pipe, test_iterations, save_iterations, checkpoint_iterati
             lambda_mv = opt.lambda_multi_view
             Lmv = multi_view_loss(scene, viewpoint_cam, opt, render_pkg, pipe, background, material_stage)
 
-            render_ref = render_pkg["albedo_map"].clamp(0, 1).detach() if material_stage else gt_image
+            render_ref = gt_image # render_pkg["albedo_map"].clamp(0, 1).detach() if material_stage else gt_image
             lambda_dn = opt.lambda_depth_normal
             Ldn = depth_normal_loss(render_pkg["normal_map"], render_pkg["sobel_map"], gt_image=render_ref)
 
