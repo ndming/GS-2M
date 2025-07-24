@@ -217,7 +217,7 @@ def roughness_loss(scene, viewpoint_cam, opt, render_pkg, pipe, bg_color):
 
     # consistent_error = ncc_error.detach().pow(0.5)
     # reflection_threshold = opt.reflection_threshold
-    increase_mask = (ncc_error < 0.0) & (rough_vals <= 0.5).detach()
+    increase_mask = (ncc_error < 0.0) & (rough_vals <= 0.8).detach()
     decrease_mask = (ncc_error > 0.0) & (rough_vals > 0.08).detach()
 
     rough_mask = increase_mask | decrease_mask

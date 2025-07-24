@@ -31,7 +31,7 @@ def pbr_render(scene, viewpoint_cam, canonical_rays, render_pkg, metallic, gamma
     # If not training metallic, estimate it from roughness
     if not metallic:
         alpha_map = render_pkg["alpha_map"].detach() # (1, H, W)
-        metallic_map = (roughness_map < 0.5).float() # (1, H, W)
+        metallic_map = (1.0 - roughness_map).clamp(0, 1) # (1, H, W)
         metallic_map = alpha_map * metallic_map # (1, H, W)
         metallic_map = metallic_map.detach()
 
