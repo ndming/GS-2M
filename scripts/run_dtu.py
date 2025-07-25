@@ -53,7 +53,7 @@ runtimes = []
 for scene in scenes:
     scene_start = time.time()
 
-    common_args = f"-r 2 --material"
+    common_args = f"-r 2 --material --mask_gt --reflection_threshold 1.0 --lambda_smooth 0.0 --lambda_normal 0.1 --lambda_depth_normal 0.015"
     cmd = f'python train.py -s {data_base_path}/scan{scene} -m {out_base_path}/scan{scene} {common_args}'
     print("[>] " + cmd)
     os.system(cmd)
