@@ -53,7 +53,7 @@ python train.py -s /path/to/scene -m /path/to/model/directory
 
 - `--material`: enable material decomposition as part of training, default to `False`.
 - `--reflection_threshold`: control how sensitive multi-view photometric variations to the detection of smooth surfaces.
-As a recommendation, please set to `1.0` or greater for diffuse surfaces, and less than `1.0` for reflective surfaces.
+We suggest setting to `1.0` or greater for diffuse surfaces, and less than `1.0` for reflective surfaces.
 - `--lambda_smooth`: if there are not enough reflection clues, increase this parameter to propagate correctly identified roughness.
 - `--lambda_normal`: if the reconstructed mesh is not water-tight, increase this parameter to fill the gaps.
 - `-r`: downscale input images, recommended for high resolution training data (more than 1k6 pixels width/height).
@@ -91,7 +91,49 @@ improve robustness to noise but blur fine details.
 </details>
 
 ## Evaluation
-TODO
+Please follow the following steps to reproduce evaluation results.
+
+### Mesh reconstruction on the DTU dataset
+- Obtain the preprocessed dataset from [2DGS](https://surfsplatting.github.io/), the dataset should be organized as:
+```
+dtu/
+├── scan24/
+│   ├── images/
+│   ├── sparse/
+│   └── ...
+├── scan37/
+├── scan40/
+└── ...
+```
+- Download the ground truth point clouds from the [DTU homepage](https://roboimagedata.compute.dtu.dk/?page_id=36):
+only the `SampleSets` and `Points` are required.
+- Create a directory named `Official_DTU_Dataset` under `dtu/`, copy `Calibration`, `Cleaned`, `ObsMask`, `Points`,
+`Rectified`, `Surfaces` directories from `SampleSets/MVS Data` to `Official_DTU_Dataset/`
+- Replace the copied `Official_DTU_Dataset/Points/stl` with `Points/stl`
+- Make sure the structure of `Official_DTU_Dataset` as follow:
+```
+dtu/Official_DTU_Dataset/
+├── Calibration/
+├── Cleaned/
+├── ObsMask/
+├── Points/
+├── Rectified/
+├── Surfaces/
+└── ...
+```
+- Run the following script:
+```
+# You may need to adjust `data_base_path` in `run_dtu.py` to point to your `dtu/`
+python scripts/run_dtu.py
+```
+- Get reconstruction results for `ours_wo-brdf`:
+```
+python scripts/report_dtu.py --method ours_wo-brdf_30000
+```
+- Get reconstruction results for `ours`:
+```
+python scripts/report_dtu.py --method ours_30000
+```
 
 ## Acknowledgements
 This repository and the entire project are based on previous Gaussian splatting works. We acknowledge and appreciate
