@@ -9,13 +9,13 @@ In general, you will need a working C++ compiler to build all CUDA submodules:
 - Linux: a recent version of GCC is sufficient (we tested with `11.4`)
 
 Clone the repo:
-```
+```shell
 git clone https://github.com/ndming/GS-2M.git
 cd GS-2M
 ```
 
 Please use `conda`/`mamba` to manage your local environment:
-```
+```shell
 conda env create --file environment.yml
 conda activate gs2m
 ```
@@ -44,7 +44,7 @@ scene/
 ```
 
 ### Training
-```
+```shell
 python train.py -s /path/to/scene -m /path/to/model/directory
 ```
 
@@ -69,7 +69,7 @@ reconstructing objects from scenes with overwhelming background.
 </details>
 
 ### Mesh extraction
-```
+```shell
 python render.py -m /path/to/model/directory --extract_mesh --skip_test
 ```
 
@@ -105,8 +105,8 @@ dtu/
 ├── scan40/
 └── ...
 ```
-- Download the ground truth point clouds from the [DTU homepage](https://roboimagedata.compute.dtu.dk/?page_id=36):
-only the `SampleSets` and `Points` are required.
+- Download the ground truth point clouds from [DTU](https://roboimagedata.compute.dtu.dk/?page_id=36): only the
+`SampleSets` and `Points` are required.
 - Create a directory named `Official_DTU_Dataset` under `dtu/`, copy `Calibration`, `Cleaned`, `ObsMask`, `Points`,
 `Rectified`, `Surfaces` directories from `SampleSets/MVS Data` to `Official_DTU_Dataset/`
 - Replace the copied `Official_DTU_Dataset/Points/stl` with `Points/stl`
@@ -122,18 +122,20 @@ dtu/Official_DTU_Dataset/
 └── ...
 ```
 - Run the following script:
-```
+```shell
 # You may need to adjust `data_base_path` in `run_dtu.py` to point to your `dtu/`
 python scripts/run_dtu.py
 ```
 - Get reconstruction results for `ours_wo-brdf`:
-```
+```shell
 python scripts/report_dtu.py --method ours_wo-brdf_30000
 ```
 - Get reconstruction results for `ours`:
-```
+```shell
 python scripts/report_dtu.py --method ours_30000
 ```
+
+### Material decomposition on the Shiny Blender Synthetic dataset
 
 ## Acknowledgements
 This repository and the entire project are based on previous Gaussian splatting works. We acknowledge and appreciate
