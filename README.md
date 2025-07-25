@@ -51,12 +51,13 @@ python train.py -s /path/to/scene -m /path/to/model/directory
 <details>
 <summary><span style="font-weight: bold;">Additional settings to change the behavior of train.py</span></summary>
 
-- `--material`: enable material decomposition as part of training, default to `False`
-- `--reflection_threshold`: control how sensitive multi-view photometric variations to the detection of smooth surfaces
-- `--lambda_smooth`: if there are not enough reflection clues, increase this parameter to propagate correctly identified roughness
-- `--lambda_normal`: if the reconstructed mesh is not water-tight, increase this parameter to fill the gaps
+- `--material`: enable material decomposition as part of training, default to `False`.
+- `--reflection_threshold`: control how sensitive multi-view photometric variations to the detection of smooth surfaces.
+As a recommendation, please set to `1.0` or greater for diffuse surfaces, and less than `1.0` for reflective surfaces.
+- `--lambda_smooth`: if there are not enough reflection clues, increase this parameter to propagate correctly identified roughness.
+- `--lambda_normal`: if the reconstructed mesh is not water-tight, increase this parameter to fill the gaps.
 - `-r`: downscale input images, recommended for high resolution training data (more than 1k6 pixels width/height).
-For example, `-r 2` will train with images at half the resolution of the original. 
+For example, `-r 2` will train with images at half the resolution of the original.
 - `--masks`: the name of the directory containing masks of foreground object. For the directory structure shown above,
 the option shall be specified as `--masks masks`. Note that, by default, the code will pick up the alpha channel of the
 GT images for foreground masks if they are RGBA. However, training will prioritize `--masks` over alpha channel if
