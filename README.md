@@ -91,7 +91,7 @@ improve robustness to noise but blur fine details.
 </details>
 
 ## Evaluation
-Please follow the following steps to reproduce evaluation results.
+Please follow these steps to reproduce evaluation results.
 
 ### Mesh reconstruction on the DTU dataset
 - Obtain the preprocessed dataset from [2DGS](https://surfsplatting.github.io/), the dataset should be organized as:
@@ -136,6 +136,27 @@ python scripts/report_dtu.py --method ours_30000
 ```
 
 ### Material decomposition on the Shiny Blender Synthetic dataset
+- Obtain a copy of the [ShinyBlender](https://dorverbin.github.io/refnerf/) synthetic dataset, organized as:
+```
+shiny/
+├── ball/
+│   ├── test/
+│   ├── train/
+│   ├── transforms_test.json
+│   └── transforms_train.json
+├── car/
+├── coffee/
+└── ...
+```
+- Run the following script:
+```shell
+# You may need to adjust `data_base_path` in `run_shiny.py` to point to your `shiny/`
+python scripts/run_shiny.py
+```
+- Check the decomposition results under:
+```
+output/shiny/<scene>/test/visual/
+```
 
 ## Acknowledgements
 This repository and the entire project are based on previous Gaussian splatting works. We acknowledge and appreciate
@@ -148,3 +169,4 @@ all the great research and publicly available code that made this possible.
 - Deferred reflection: [3DGS-DR](https://gapszju.github.io/3DGS-DR/)
 - Preprocessed DTU dataset: [2DGS](https://surfsplatting.github.io/)
 - Preprocessed TnT dataset: [GOF](https://niujinshuchong.github.io/gaussian-opacity-fields/)
+- ShinyBlender synthetic dataset: [Ref-NeRF](https://dorverbin.github.io/refnerf/)
