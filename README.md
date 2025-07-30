@@ -155,7 +155,7 @@ python scripts/run_shiny.py
 ```
 - Check the decomposition results under:
 ```
-output/shiny/<scene>/test/visual/
+output/shiny/<scene>/test/ours_30000/visual/
 ```
 
 ## Acknowledgements
