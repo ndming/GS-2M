@@ -163,8 +163,8 @@ def train(model, opt, pipe, test_iterations, save_iterations, checkpoint_iterati
             #     scene.cubemap.base[None, ...], scene.envmap_dirs[None, ...].contiguous(),
             #     filter_mode="linear", boundary_mode="cube")[0] # (H, W, 3)
             # envmap_target = F.avg_pool2d(envmap, kernel_size=3, stride=1, padding=1).detach()
-            # # target_energy = 2.0 if model.gamma else 0.8
-            # Lenv = (envmap - envmap_target).abs().mean()
+            # target_energy = 2.0 if model.gamma else 0.8
+            # Lenv = (envmap.mean() - target_energy) ** 2.0
             # # tv_h1 = envmap[1:, :, :] - envmap[:-1, :, :].abs()
             # # tv_w1 = envmap[:, 1:, :] - envmap[:, :-1, :].abs()
             # lambda_envmap = opt.lambda_envmap

@@ -113,6 +113,8 @@ class OptimizationParams(ParamGroup):
         self.use_multi_view_trim = True
         self.multi_view_sample_num = 102400
         self.multi_view_patch_size = 3
+        self.max_abs_split_points = 50_000
+        self.max_all_points = 6_000_000
         # Ours
         self.geometry_from_iter = 5000
         self.material_from_iter = 30_000

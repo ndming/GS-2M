@@ -527,7 +527,7 @@ def tv_loss2(gt_image: torch.Tensor, prediction: torch.Tensor, pad=1, step=1):
 
     return tv_loss
 
-def tv_loss(gt_image: torch.Tensor, pred: torch.Tensor, norm1=True, weight_map: torch.Tensor=None) -> torch.Tensor:
+def tv_loss(gt_image: torch.Tensor, pred: torch.Tensor, weight_map: torch.Tensor=None, norm1=True, use_gt=True) -> torch.Tensor:
     rgb_grad_h = torch.exp(-(gt_image[:, 1:, :] - gt_image[:, :-1, :]).abs().mean(dim=0, keepdim=True)) # (1, H-1, W)
     rgb_grad_w = torch.exp(-(gt_image[:, :, 1:] - gt_image[:, :, :-1]).abs().mean(dim=0, keepdim=True)) # (1, H, W-1)
     if norm1:
@@ -537,8 +537,12 @@ def tv_loss(gt_image: torch.Tensor, pred: torch.Tensor, norm1=True, weight_map: 
         tv_h = torch.pow(pred[:, 1:, :] - pred[:, :-1, :], 2) # (C, H-1, W)
         tv_w = torch.pow(pred[:, :, 1:] - pred[:, :, :-1], 2) # (C, H, W-1)
 
-    loss_h = tv_h * rgb_grad_h
-    loss_w = tv_w * rgb_grad_w
+    loss_h = tv_h # * rgb_grad_h
+    loss_w = tv_w # * rgb_grad_w
+
+    if use_gt:
+        loss_h *= rgb_grad_h
+        loss_w *= rgb_grad_w
 
     # if erosion:
     #     kernel = mask.new_ones([7, 7])
