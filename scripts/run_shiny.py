@@ -34,6 +34,9 @@ for scene, ref, sm, norm in zip(scenes, ref_thresholds, lambda_smooths, lambda_n
     print("[>] " + cmd)
     os.system(cmd)
 
+    scene_time = time.time() - scene_start
+    runtimes.append(scene_time)
+
     common_args = f"--method {label}_30000 --force"
     cmd = f"python scripts/vis_blender.py -m {out_base_path}/{scene} -d {data_base_path}/{scene} {common_args}"
     print("[>] " + cmd)

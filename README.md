@@ -110,7 +110,7 @@ dtu/
 - Create a directory named `Official_DTU_Dataset` under `dtu/`, copy `Calibration`, `Cleaned`, `ObsMask`, `Points`,
 `Rectified`, `Surfaces` directories from `SampleSets/MVS Data` to `Official_DTU_Dataset/`
 - Replace the copied `Official_DTU_Dataset/Points/stl` with `Points/stl`
-- Make sure the structure of `Official_DTU_Dataset` as follow:
+- Make sure the structure of `Official_DTU_Dataset` as follows:
 ```
 dtu/Official_DTU_Dataset/
 ├── Calibration/
@@ -158,6 +158,57 @@ python scripts/run_shiny.py
 output/shiny/<scene>/test/ours_30000/visual/
 ```
 
+### Material decomposition on the Glossy Blender Synthetic dataset
+- Obtain a copy of the [GlossyBlender](https://liuyuan-pal.github.io/NeRO/) synthetic dataset, organized as:
+```
+glossy/
+├── angel/
+│   ├── 0.png
+│   ├── 0-camera.pkl
+│   ├── 0-depth.png
+│   └── ...
+├── bell/
+├── cat/
+└── ...
+```
+- Run the following script:
+```shell
+# You may need to adjust `data_base_path` in `run_glossy.py` to point to your `glossy/`
+python scripts/run_glossy.py
+```
+- Check the reconstruction results under:
+```
+output/glossy/<scene>/test/ours_10000/
+```
+
+### Mesh reconstruction on the TnT dataset
+- Obtain a copy of the preprocessed dataset from [GOF](https://huggingface.co/datasets/ZehaoYu/gaussian-opacity-fields/tree/main)
+- Visit the [download page](https://www.tanksandtemples.org/download/) of the Tanks and Temples Benchmark for GT
+- Download Camera Poses (`*_COLMAP_SfM.log`), Alignment (`*_trans.txt`), Cropfiles (`*.json`), and GT (`*.ply`) for
+the Barn and Truck scenes
+- Please organize your files as follows:
+```
+tnt/
+├── Barn/
+│   ├── sparse/
+│   ├── images/
+│   ├── Barn_COLMAP_SfM.log
+│   ├── Barn.ply
+│   ├── Barn.json
+│   └── Barn_trans.txt
+├── Truck/
+└── ...
+```
+- Run the following script:
+```shell
+# You may need to adjust `data_base_path` in `run_tnt.py` to point to your `tnt/`
+python scripts/run_tnt.py
+```
+- Check the reconstruction results under:
+```
+output/tnt/<scene>/train/ours_wo-brdf_30000/mesh/evaluation/
+```
+
 ## Acknowledgements
 This repository and the entire project are based on previous Gaussian splatting works. We acknowledge and appreciate
 all the great research and publicly available code that made this possible.
@@ -170,3 +221,4 @@ all the great research and publicly available code that made this possible.
 - Preprocessed DTU dataset: [2DGS](https://surfsplatting.github.io/)
 - Preprocessed TnT dataset: [GOF](https://niujinshuchong.github.io/gaussian-opacity-fields/)
 - ShinyBlender synthetic dataset: [Ref-NeRF](https://dorverbin.github.io/refnerf/)
+- GlossyBlender synthetic dataset: [NeRO](https://liuyuan-pal.github.io/NeRO/)

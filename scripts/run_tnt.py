@@ -6,7 +6,7 @@ import numpy as np
 import open3d as o3d
 from pathlib import Path
 
-scenes = ["Barn", "Caterpillar", "Courthouse", "Ignatius", "Meetingroom", "Truck"]
+scenes = ["Barn", "Truck"]
 data_base_path='/home/zodnguy1/datasets/tnt'
 out_base_path='output/tnt'
 
@@ -19,6 +19,13 @@ if runtime_file.exists():
 label = f'ours_wo-brdf'
 runtimes = []
 for scene in scenes:
+    # Export the scene's bounding box if we haven't done that
+    if not Path(f"{data_base_path}/{scene}/transforms.json").exists():
+        print(f"[>] Could not find transforms.json, exporting one...")
+        cmd = f"python scripts/preprocess/convert_json.py --data_dir {data_base_path}/{scene}"
+        print("[>] " + cmd)
+        os.system(cmd)
+
     scene_start = time.time()
 
     common_args = f"-r 2 --densify_grad_abs_threshold 0.00015 --opacity_prune_threshold 0.05"
