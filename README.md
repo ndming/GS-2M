@@ -1,5 +1,7 @@
 # GS-2M: Gaussian Splatting for Joint Mesh Reconstruction and Material Decomposition
 
+![cover](media/cover.png)
+
 ## Installation
 The code has been tested on Windows and Linux.
 
