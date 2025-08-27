@@ -136,6 +136,9 @@ def alpha_loss(alpha_map, roughness_map, normal_mask):
     return loss
 
 def roughness_loss(scene, viewpoint_cam, opt, render_pkg, pipe, bg_color):
+    if pipe.z_depth:
+        return 0.0
+
     nearby_indices = viewpoint_cam.nearby_indices
     nearby_cam = None if len(nearby_indices) == 0 else scene.getTrainCameras()[random.sample(nearby_indices, 1)[0]]
     if nearby_cam is None:
@@ -283,6 +286,9 @@ def multi_view_loss(scene, viewpoint_cam, opt, render_pkg, pipe, bg_color, mater
     pixel_loss = (geo_weights * pixel_noise)[pixel_valid.detach()].mean() if pixel_valid.sum() > 0 else 0.0
     angle_loss = (geo_weights * angle_noise)[angle_valid.detach()].mean() if angle_valid.sum() > 0 else 0.0
     geo_loss = pixel_loss + angle_loss
+
+    if pipe.z_depth:
+        return opt.multi_view_geo_weight * geo_loss
 
     ncc_scale = scene.ncc_scale
     with torch.no_grad():

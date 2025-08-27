@@ -147,7 +147,7 @@ def render(
         "radii": radii, # (N,)
         "observe": observe, # (N,)
         "alpha_map": buffer[0:1, ...], # (1, H, W)
-        "distance_map": distance_map, # (1, H, W)
+        "distance_map": distance_map if not pipe.z_depth else None, # (1, H, W)
         "depth_map": depth_map, # (1, H, W)
         "normal_map": normal_map, # (3, H, W)
         "albedo_map": buffer[5:8, ...], # (3, H, W)
