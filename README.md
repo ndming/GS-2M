@@ -1,5 +1,5 @@
 # GS-2M: Gaussian Splatting for Joint Mesh Reconstruction and Material Decomposition
-
+[arXiv](https://arxiv.org/abs/2509.22276) | [Project Page](https://ndming.github.io/publications/gs2m)
 ![cover](media/cover.png)
 
 ## Installation
