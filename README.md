@@ -23,7 +23,7 @@ conda activate gs2m
 ```
 
 ## Usage
-Please follow [3DGS](https://github.com/graphdeco-inria/gaussian-splatting)'s instruction to prepare training data for your own scene.
+Please follow [3DGS](https://github.com/graphdeco-inria/gaussian-splatting)'s instructions to prepare training data for your own scene.
 
 A COLMAP-prepared training directory for `GS-2M` may look like the following. Note that `masks` is completely optional.
 If you have foreground masks of the target object and want to use them, put them as shown below. 
@@ -54,19 +54,19 @@ python train.py -s /path/to/scene -m /path/to/model/directory
 <summary><span style="font-weight: bold;">Additional settings to change the behavior of train.py</span></summary>
 
 - `--material`: enable material decomposition as part of training, default to `False`.
-- `--reflection_threshold`: control how sensitive multi-view photometric variations to the detection of smooth surfaces.
+- `--reflection_threshold`: control how sensitive multi-view photometric variations are to the detection of smooth surfaces.
 We suggest setting to `1.0` or greater for diffuse surfaces, and less than `1.0` for reflective surfaces.
 - `--lambda_smooth`: if there are not enough reflection clues, increase this parameter to propagate correctly identified roughness.
 - `--lambda_normal`: if the reconstructed mesh is not water-tight, increase this parameter to fill the gaps.
 - `-r`: downscale input images, recommended for high resolution training data (more than 1k6 pixels width/height).
 For example, `-r 2` will train with images at half the resolution of the original.
-- `--masks`: the name of the directory containing masks of foreground object. For the directory structure shown above,
+- `--masks`: the name of the directory containing masks of the foreground object. For the directory structure shown above,
 the option shall be specified as `--masks masks`. Note that, by default, the code will pick up the alpha channel of the
 GT images for foreground masks if they are RGBA. However, training will prioritize `--masks` over alpha channel if
-they both co-exist.
+they co-exist.
 - `--mask_gt`: even with `--masks` or the alpha channel from input images, training would still perform with unmasked RGB
 as GT. To mask them out and fit Gaussians to the foreground object only, add this option. This is especially useful for
-reconstructing objects from scenes with overwhelming background.
+reconstructing objects from scenes with overwhelming background details.
 
 </details>
 
@@ -77,13 +77,13 @@ python render.py -m /path/to/model/directory --extract_mesh --skip_test
 
 The `.ply` file of the extracted triangle mesh should be found under:
 ```
-/path/to/model/directory/train/ours_30000/meshs/tsdf_post.ply
+/path/to/model/directory/train/ours_30000/mesh/tsdf_post.ply
 ```
 
 <details>
 <summary><span style="font-weight: bold;">Important parameters for render.py</span></summary>
 
-- `--max_depth`: the maximum distance beyond which points will be discared during depth fusion. This can be estimated
+- `--max_depth`: the maximum distance beyond which points will be discarded during depth fusion. This can be estimated
 from the scene's half extent value reported during training/rendering.
 - `--voxel_size`: how dense the sampling grid should be for TSDF fusion.
 - `--sdf_trunc`: smaller values yield sharper surfaces but increase sensitivity to depth noise, while larger values
@@ -93,7 +93,7 @@ improve robustness to noise but blur fine details.
 </details>
 
 ## Evaluation
-Please follow these steps to reproduce evaluation results.
+Please follow these steps to reproduce the evaluation results.
 
 ### Mesh reconstruction on the DTU dataset
 - Obtain the preprocessed dataset from [2DGS](https://surfsplatting.github.io/), the dataset should be organized as:
@@ -112,7 +112,7 @@ dtu/
 - Create a directory named `Official_DTU_Dataset` under `dtu/`, copy `Calibration`, `Cleaned`, `ObsMask`, `Points`,
 `Rectified`, `Surfaces` directories from `SampleSets/MVS Data` to `Official_DTU_Dataset/`
 - Replace the copied `Official_DTU_Dataset/Points/stl` with `Points/stl`
-- Make sure the structure of `Official_DTU_Dataset` as follows:
+- Make sure the structure of `Official_DTU_Dataset` is as follows:
 ```
 dtu/Official_DTU_Dataset/
 ├── Calibration/
@@ -224,3 +224,16 @@ all the great research and publicly available code that made this possible.
 - Preprocessed TnT dataset: [GOF](https://niujinshuchong.github.io/gaussian-opacity-fields/)
 - ShinyBlender synthetic dataset: [Ref-NeRF](https://dorverbin.github.io/refnerf/)
 - GlossyBlender synthetic dataset: [NeRO](https://liuyuan-pal.github.io/NeRO/)
+
+## BibTeX
+```
+@misc{nguyen2025gs2m,
+      title={GS-2M: Gaussian Splatting for Joint Mesh Reconstruction and Material Decomposition},
+      author={Dinh Minh Nguyen and Malte Avenhaus and Thomas Lindemeier},
+      year={2025},
+      eprint={2509.22276},
+      archivePrefix={arXiv},
+      primaryClass={cs.CV},
+      url={https://arxiv.org/abs/2509.22276},
+}
+```
