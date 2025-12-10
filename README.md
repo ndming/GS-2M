@@ -6,8 +6,7 @@
 The code has been tested on Windows and Linux.
 
 In general, you will need a working C++ compiler to build all CUDA submodules:
-- Windows: please install VS BuildTools version [`17.9.7`](https://learn.microsoft.com/en-us/visualstudio/releases/2022/release-history)
-(MSVC `19.39`) as newer versions require CUDA `>=12.4`
+- Windows: please make sure your Visual Studio version is `<=17.9.7` (MSVC `<=19.39`), as newer VS versions require CUDA `>=12.4` (older VS BuildTools are available [here](https://learn.microsoft.com/en-us/visualstudio/releases/2022/release-history)). Though it is not guaranteed, more recent combinations of CUDA and VS should work fine.
 - Linux: a recent version of GCC is sufficient (we tested with `11.4`)
 
 Clone the repo:
