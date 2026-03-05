@@ -1,7 +1,3 @@
-# Remember to set the PYTHONPATH env variable before running this script
-# - Linux: export PYTHONPATH=$PYTHONPATH:scripts/birefnet
-# - Win32: $env:PYTHONPATH="$env:PYTHONPATH;scripts\birefnet"
-
 from argparse import ArgumentParser
 from pathlib import Path
 from PIL import Image

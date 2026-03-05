@@ -77,14 +77,17 @@ to extract foreground masks of the target object. We will be using the amazing m
 # Clone the BiRefNet repo to scripts directory
 git clone https://github.com/ZhengPeng7/BiRefNet.git scripts/birefnet
 
-# Optional: download their checkpoint from Google Drive to use locally if your network cannot access HuggingFace
+# Optional: download checkpoint to use locally if your network cannot access HuggingFace
 # Link: https://drive.google.com/drive/folders/1s2Xe0cjq-2ctnJBR24563yMSCOu4CcxM
 # We recommend using the general checkpoint: BiRefNet_HR-general-epoch_130.pth
 
 # Once you have obtained undistorted RGB images from COLMAP, run the following script
 # - if -o is omitted, the output dir is created at the same level as the input image dir
 # - if -w is omitted, the model will fetch weights from HuggingFace
-python scripts/mask.py -i /path/to/images [-o /path/to/output -w /path/to/weight]
+# On Linux:
+PYTHONPATH=scripts/birefnet python scripts/mask.py -i /path/to/images [-o /path/to/output -w /path/to/weight]
+# On Windows (PowerShell)
+$env:PYTHONPATH="scripts\birefnet"; python scripts/mask.py -i /path/to/images [-o /path/to/output -w /path/to/weight]
 
 # Now train using the foreground masks to remove background in the extracted mesh
 # If the output masks in the previous step were saved to a custom location not
