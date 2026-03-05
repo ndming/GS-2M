@@ -7,3 +7,5 @@ diff_rasterization/dist
 tensorboard_3d
 screenshots
 *.ipynb
+scripts/birefnet
+weights/

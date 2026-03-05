@@ -25,7 +25,11 @@ dependencies:
       - open3d==0.18.0
       - opencv-python
       - matplotlib
-      - scikit-image # for DTU evaluation
-      - scikit-learn # for DTU evaluation
-      - trimesh      # for DTU evaluation
-      - tensorboard  # optional
+      - scikit-image    # for DTU evaluation
+      - scikit-learn    # for DTU evaluation
+      - trimesh         # for DTU evaluation
+      - tensorboard     # optional
+      - einops          # for masking with BiRefNet
+      - kornia          # for masking with BiRefNet
+      - timm            # for masking with BiRefNet
+      - huggingface_hub # for masking with BiRefNet

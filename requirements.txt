@@ -7,6 +7,10 @@ scikit-image
 scikit-learn
 trimesh
 tensorboard
+einops
+kornia
+huggingface_hub
+timm
 submodules/diff-gaussian-rasterization
 submodules/nvdiffrast
 submodules/render-utils

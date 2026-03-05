@@ -22,7 +22,7 @@ conda activate gs2m
 ```
 
 <details>
-<summary><span style="font-weight: bold;">Installing with Python virtual environment</span></summary>
+<summary><span style="font-weight: bold;">Installing via Python virtual environment</span></summary>
 
 Installing with Conda fetches a copy of CUDA toolkit to run locally within the environment. If you instead prefer to use your system-wide CUDA:
 - Please make sure your CUDA is visible globally:
@@ -33,7 +33,11 @@ nvcc --version
 ```bash
 python3.10 -m venv gs2m
 ```
-- Install a version of [PyTorch and TorchVision](https://pytorch.org/get-started/previous-versions/) compatible with your CUDA version (you may need to install `numpy<2.0.0` prior to this step becasue `torch` automatically pulls the latest `numpy`).
+- Install `numpy<2.0.0`:
+```bash
+pip install numpy==1.26.4
+```
+- Install a version of [PyTorch and TorchVision](https://pytorch.org/get-started/previous-versions/) compatible with your CUDA version.
 - Install the remaining packages:
 ```bash
 pip install -r requirements.txt
@@ -63,6 +67,33 @@ scene/
 │   └── ...
 └── database.db
 ```
+
+<details>
+<summary><span style="font-weight: bold;">Masking for object-centric reconstruction</span></summary>
+
+To reconstruct geometrically corrected objects from scenes with overwhelimg background, consider following these steps
+to extract foreground masks of the target object. We will be using the amazing model [BiRefNet](https://github.com/ZhengPeng7/BiRefNet?tab=readme-ov-file) from [this paper](https://arxiv.org/pdf/2401.03407).
+```bash
+# Clone the BiRefNet repo to scripts directory
+git clone https://github.com/ZhengPeng7/BiRefNet.git scripts/birefnet
+
+# Optional: download their checkpoint from Google Drive to use locally if your network cannot access HuggingFace
+# Link: https://drive.google.com/drive/folders/1s2Xe0cjq-2ctnJBR24563yMSCOu4CcxM
+# We recommend using the general checkpoint: BiRefNet_HR-general-epoch_130.pth
+
+# Once you have obtained undistorted RGB images from COLMAP, run the following script
+# - if -o is omitted, the output dir is created at the same level as the input image dir
+# - if -w is omitted, the model will fetch weights from HuggingFace
+python scripts/mask.py -i /path/to/images [-o /path/to/output -w /path/to/weight]
+
+# Now train using the foreground masks to remove background in the extracted mesh
+# If the output masks in the previous step were saved to a custom location not
+# within the source dir (the same place as images), please provide an absolute path
+python train.py ... --masks /path/to/mask/dir --mask_gt
+
+```
+
+</details>
 
 ### Training
 ```bash

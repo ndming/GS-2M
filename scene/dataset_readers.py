@@ -152,7 +152,13 @@ def readColmapSceneInfo(path, images, masks, depths, eval, llffhold=8):
 
     image_dir = os.path.join(path, images)
     depth_dir = os.path.join(path, depths) if depths != "" else ""
-    mask_dir = os.path.join(path, masks) if masks != "" else ""
+    
+    # Mask dir could be an absolute path or a relative one
+    mask_dir = ""
+    if masks != "":
+        mask_dir_path = Path(masks)
+        mask_dir = str(mask_dir_path) if mask_dir_path.is_absolute() else os.path.join(path, masks)
+    
     cam_infos_unsorted = readColmapCameras(
         cam_extrinsics=cam_extrinsics, cam_intrinsics=cam_intrinsics,
         image_dir=image_dir, mask_dir=mask_dir, depth_dir=depth_dir)
