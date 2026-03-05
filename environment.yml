@@ -28,3 +28,4 @@ dependencies:
       - scikit-image # for DTU evaluation
       - scikit-learn # for DTU evaluation
       - trimesh      # for DTU evaluation
+      - tensorboard  # optional

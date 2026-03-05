@@ -1,5 +1,5 @@
-# GS-2M: Gaussian Splatting for Joint Mesh Reconstruction and Material Decomposition
-[arXiv](https://arxiv.org/abs/2509.22276) | [Project Page](https://ndming.github.io/publications/gs2m)
+# GS-2M: Material-aware Gaussian Splatting for High-fidelity Mesh Reconstruction
+[arXiv](https://arxiv.org/abs/2509.22276) (updating) | [Project Page](https://ndming.github.io/publications/gs2m)
 ![cover](media/cover.png)
 
 ## Installation
@@ -10,16 +10,36 @@ In general, you will need a working C++ compiler to build all CUDA submodules:
 - Linux: a recent version of GCC is sufficient (we tested with `11.4`)
 
 Clone the repo:
-```shell
+```bash
 git clone https://github.com/ndming/GS-2M.git
 cd GS-2M
 ```
 
 Please use `conda`/`mamba` to manage your local environment:
-```shell
+```bash
 conda env create --file environment.yml
 conda activate gs2m
 ```
+
+<details>
+<summary><span style="font-weight: bold;">Installing with Python virtual environment</span></summary>
+
+Installing with Conda fetches a copy of CUDA toolkit to run locally within the environment. If you instead prefer to use your system-wide CUDA:
+- Please make sure your CUDA is visible globally:
+```bash
+nvcc --version
+```
+- Create a Python virtual environment and **activate it**:
+```bash
+python3.10 -m venv gs2m
+```
+- Install a version of [PyTorch and TorchVision](https://pytorch.org/get-started/previous-versions/) compatible with your CUDA version (you may need to install `numpy<2.0.0` prior to this step becasue `torch` automatically pulls the latest `numpy`).
+- Install the remaining packages:
+```bash
+pip install -r requirements.txt
+```
+
+</details>
 
 ## Usage
 Please follow [3DGS](https://github.com/graphdeco-inria/gaussian-splatting)'s instructions to prepare training data for your own scene.
@@ -45,7 +65,7 @@ scene/
 ```
 
 ### Training
-```shell
+```bash
 python train.py -s /path/to/scene -m /path/to/model/directory
 ```
 
@@ -70,7 +90,7 @@ reconstructing objects from scenes with overwhelming background details.
 </details>
 
 ### Mesh extraction
-```shell
+```bash
 python render.py -m /path/to/model/directory --extract_mesh --skip_test
 ```
 
@@ -123,7 +143,7 @@ dtu/Official_DTU_Dataset/
 └── ...
 ```
 - Run the following script:
-```shell
+```bash
 # You may need to adjust `data_base_path` in `run_dtu.py` to point to your `dtu/`
 python scripts/run_dtu.py
 ```
@@ -150,7 +170,7 @@ shiny/
 └── ...
 ```
 - Run the following script:
-```shell
+```bash
 # You may need to adjust `data_base_path` in `run_shiny.py` to point to your `shiny/`
 python scripts/run_shiny.py
 ```
@@ -173,7 +193,7 @@ glossy/
 └── ...
 ```
 - Run the following script:
-```shell
+```bash
 # You may need to adjust `data_base_path` in `run_glossy.py` to point to your `glossy/`
 python scripts/run_glossy.py
 ```
@@ -201,7 +221,7 @@ tnt/
 └── ...
 ```
 - Run the following script:
-```shell
+```bash
 # You may need to adjust `data_base_path` in `run_tnt.py` to point to your `tnt/`
 python scripts/run_tnt.py
 ```

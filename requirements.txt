@@ -1,0 +1,14 @@
+plyfile
+tqdm
+open3d==0.18.0
+opencv-python
+matplotlib
+scikit-image
+scikit-learn
+trimesh
+tensorboard
+submodules/diff-gaussian-rasterization
+submodules/nvdiffrast
+submodules/render-utils
+submodules/simple-knn
+submodules/fused-ssim
