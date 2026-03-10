@@ -1,5 +1,5 @@
 # GS-2M: Material-aware Gaussian Splatting for High-fidelity Mesh Reconstruction
-[arXiv](https://arxiv.org/abs/2509.22276) (updating) | [Project Page](https://ndming.github.io/publications/gs2m)
+[arXiv](https://arxiv.org/abs/2509.22276) | [Project Page](https://ndming.github.io/publications/gs2m)
 ![cover](media/cover.png)
 
 ## Installation
@@ -11,7 +11,7 @@ In general, you will need a working C++ compiler to build all CUDA submodules:
 
 Clone the repo:
 ```bash
-git clone https://github.com/ndming/GS-2M.git
+git clone https://github.com/ndming/GS-2M.git --recursive
 cd GS-2M
 ```
 

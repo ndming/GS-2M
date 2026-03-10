@@ -3,6 +3,7 @@ tqdm
 open3d==0.18.0
 opencv-python
 matplotlib
+numpy<2.0.0
 scikit-image
 scikit-learn
 trimesh
