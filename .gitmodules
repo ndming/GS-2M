@@ -1,3 +1,4 @@
 [submodule "submodules/gsplat"]
 	path = submodules/gsplat
 	url = https://github.com/ndming/gsplat.git
+	branch = ndming/gs2m
