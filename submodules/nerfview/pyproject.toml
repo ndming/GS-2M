@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools>=68.0.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "nerfview"
+version = "0.1.4"
+description = "Interactive NeRF rendering web viewer"
+readme = "README.md"
+license = { text = "MIT" }
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.8",
+  "Programming Language :: Python :: 3.9",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "License :: OSI Approved :: MIT License",
+  "Operating System :: OS Independent",
+]
+dependencies = ["viser>=0.2.1"]
+
+[project.optional-dependencies]
+dev = ["black", "isort", "ipdb"]
+
+[project.urls]
+"GitHub" = "https://github.com/hangg7/nerfview"
+
+[tool.setuptools.packages.find]
+include = ["nerfview"]
+
+[tool.isort]
+profile = "black"

@@ -9,41 +9,42 @@ In general, you will need a working C++ compiler to build all CUDA submodules:
 - Windows: please make sure your Visual Studio version is `<=17.9.7` (MSVC `<=19.39`), as newer VS versions require CUDA `>=12.4` (older VS BuildTools are available [here](https://learn.microsoft.com/en-us/visualstudio/releases/2022/release-history)). Though it is not guaranteed, more recent combinations of CUDA and VS should work fine.
 - Linux: a recent version of GCC is sufficient (we tested with `11.4`)
 
-Clone the repo:
+Clone the repo and submodules:
 ```bash
 git clone https://github.com/ndming/GS-2M.git --recursive
 cd GS-2M
 ```
 
-Please use `conda`/`mamba` to manage your local environment:
+Please use Python [venv](https://docs.python.org/3/library/venv.html) to manage your local environment:
 ```bash
-conda env create --file environment.yml
-conda activate gs2m
+# Create the virtiual environment, please make sure pip<=25.2
+mkdir .venvs
+python -m venv .venvs/gs2m
+
+# Activate on Linux
+source .venvs/gs2m/bin/activate
+
+# Activate on Windows
+.\.venvs\gs2m\Scripts\Activate.ps1
+
+# Ensure setuptools and wheel compatible with submodules
+pip install -U setuptools==68 wheel
 ```
 
-<details>
-<summary><span style="font-weight: bold;">Installing via Python virtual environment</span></summary>
-
-Installing with Conda fetches a copy of CUDA toolkit to run locally within the environment. If you instead prefer to use your system-wide CUDA:
-- Please make sure your CUDA is visible globally:
-```bash
-nvcc --version
-```
-- Create a Python virtual environment and **activate it**:
-```bash
-python3.10 -m venv gs2m
-```
-- Install `numpy<2.0.0`:
+Install `numpy<2.0.0`:
 ```bash
 pip install numpy==1.26.4
 ```
-- Install a version of [PyTorch and TorchVision](https://pytorch.org/get-started/previous-versions/) compatible with your CUDA version.
-- Install the remaining packages:
+
+Install a version of [PyTorch and TorchVision](https://pytorch.org/get-started/previous-versions/) compatible with your CUDA version (cu12.8 as an example):
 ```bash
-pip install -r requirements.txt
+pip install torch==2.7.1 torchvision==0.22.1 torchaudio==2.7.1 --index-url https://download.pytorch.org/whl/cu128
 ```
 
-</details>
+Install the remaining packages
+```bash
+pip install -r requirements.txt --no-build-isolation # see requirements.txt for more details
+```
 
 ## Usage
 Please follow [3DGS](https://github.com/graphdeco-inria/gaussian-splatting)'s instructions to prepare training data for your own scene.

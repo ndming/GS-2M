@@ -1,19 +1,38 @@
+# GS-2M main dependencies
 plyfile
 tqdm
 open3d==0.18.0
 opencv-python
 matplotlib
 numpy<2.0.0
+piexif
 scikit-image
 scikit-learn
 trimesh
+tyro>=0.8.8
 tensorboard
+torchmetrics[image]
+submodules/pycolmap
+submodules/gsplat
+submodules/nvdiffrast
+submodules/render-utils
+submodules/fused-ssim
+submodules/fused-bilagrid
+
+# Foreground masking with BiRefNet
 einops
 kornia
 huggingface_hub
 timm
-submodules/diff-gaussian-rasterization
-submodules/nvdiffrast
-submodules/render-utils
-submodules/simple-knn
-submodules/fused-ssim
+
+# Additional toolings (viewer, video, trajectory, post-processing, etc.)
+imageio[ffmpeg]
+viser
+splines
+submodules/nerfview
+submodules/ppisp
+
+# Compression (for cupy-cuda, see: https://docs.cupy.dev/en/stable/install.html#installing-cupy)
+cupy-cuda12x
+torchpq
+submodules/plas

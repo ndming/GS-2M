@@ -9,3 +9,4 @@ screenshots
 *.ipynb
 scripts/birefnet
 weights/
+.venvs/
