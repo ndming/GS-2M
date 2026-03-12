@@ -17,8 +17,7 @@ cd GS-2M
 
 Please use Python [venv](https://docs.python.org/3/library/venv.html) to manage your local environment:
 ```bash
-# Create the virtiual environment, please make sure pip<=25.2
-mkdir .venvs
+# Please make sure the created venv has pip<=25.2
 python -m venv .venvs/gs2m
 
 # Activate on Linux

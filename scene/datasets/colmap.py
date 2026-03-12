@@ -55,17 +55,22 @@ def _resize_image_folder(image_dir: str, resized_dir: str, factor: int) -> str:
     return resized_dir
 
 
-def process_input_images(image_dir, target_dir, factor, mask_image=False, mask_dir=None):
+def process_input_images(image_dir, target_dir, factor, reuse=False, mask_image=False, mask_dir=None):
     output_dir = Path(target_dir)
     os.makedirs(output_dir, exist_ok=True)
 
     original_dir = Path(image_dir)
     if (factor > 1):
-        print(f"[>] Downscaling images by {factor}x under {original_dir.parent}: {original_dir.name} to {output_dir.name}")
+        print(f"[>] Training with images downscaled by {factor}x in {output_dir}")
 
-    for image_file in tqdm(original_dir.iterdir(), desc="[>] Processing images", ncols=128):
+    for image_file in tqdm(original_dir.iterdir(), desc=f"[>] Processing", ncols=128):
         # Skip if we hit some unexpected directory
         if not image_file.is_file():
+            continue
+
+        # Also skip if we're being asked to reuse exiting ones
+        output_file = output_dir / f"{image_file.stem}.png"
+        if reuse and output_file.exists():
             continue
 
         alpha_file = None if not mask_dir else Path(mask_dir) / f"{image_file.stem}.png"
@@ -95,7 +100,7 @@ def process_input_images(image_dir, target_dir, factor, mask_image=False, mask_d
             alpha = Image.new("L", resolution, 255)
 
         image.putalpha(alpha)
-        image.save(str(output_dir / f"{image_file.stem}.png"))
+        image.save(str(output_file))
     return target_dir
 
 
@@ -110,6 +115,7 @@ class Parser:
         test_every: int = 8,
         load_exposure: bool = False,
         mask_gt_image: bool = False,
+        reuse_processed_images: bool = True,
     ):
         self.data_dir = data_dir
         self.factor = factor
@@ -228,7 +234,9 @@ class Parser:
         if not os.path.exists(colmap_image_dir):
             raise ValueError(f"[!] COLMAP image dir {colmap_image_dir} does not exist!")
         image_dir = str(Path(colmap_image_dir).parent / "processed_images")
-        process_input_images(colmap_image_dir, image_dir, factor, mask_gt_image)
+        process_input_images(
+            colmap_image_dir, image_dir, factor, reuse=reuse_processed_images,
+            mask_image=mask_gt_image)
 
         # Downsampled images may have different names vs images used for COLMAP,
         # so we need to map between the two sorted lists of files.
