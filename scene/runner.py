@@ -1122,7 +1122,7 @@ class Runner:
             stats = {k: torch.stack(v).mean().item() for k, v in metrics.items()}
             stats.update(
                 {
-                    "ellapsed_time": ellapsed_time,
+                    "time_per_image": ellapsed_time,
                     "num_GS": len(self.splats["means"]),
                 }
             )
@@ -1130,13 +1130,13 @@ class Runner:
                 tqdm.write(
                     f"--- PSNR: {stats['psnr']:.3f}, SSIM: {stats['ssim']:.4f}, LPIPS: {stats['lpips']:.3f}, "
                     f"CC_PSNR: {stats['cc_psnr']:.3f}, CC_SSIM: {stats['cc_ssim']:.4f}, CC_LPIPS: {stats['cc_lpips']:.3f}, "
-                    f"Time: {stats['ellapsed_time']:.3f}s/image "
+                    f"Time: {stats['time_per_image']:.3f}s/image "
                     # f"Number of GS: {stats['num_GS']}"
                 )
             else:
                 tqdm.write(
                     f"--- PSNR: {stats['psnr']:.3f}, SSIM: {stats['ssim']:.4f}, LPIPS: {stats['lpips']:.3f}, "
-                    f"Time: {stats['ellapsed_time']:.3f}s/image "
+                    f"Time: {stats['time_per_image']:.3f}s/image "
                     # f"Number of GS: {stats['num_GS']}"
                 )
             # save stats as json
