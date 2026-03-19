@@ -14,7 +14,7 @@ def run(base_dir, out_dir, strategy, postfix):
         result_dir = out_dir / out_dir_name
 
         # Train without eval
-        opt = "--disable-viewer --eval_steps -1"
+        opt = "--disable-viewer --eval-steps -1 --test-every 8"
         cmd = f"python train.py {strategy} --data-dir {scene_dir} --data-factor {factor} --result-dir {result_dir} {opt}"
         print(f"[>] {cmd}")
         ret = os.system(cmd)

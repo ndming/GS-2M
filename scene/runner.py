@@ -35,7 +35,7 @@ from viewer import GsplatViewer, GsplatRenderTabState
 from nerfview import CameraState, RenderTabState, apply_float_colormap
 from fused_ssim import fused_ssim
 
-from .datasets.colmap import Dataset, Parser
+from .datasets import Dataset, get_parser
 from .datasets.traj import generate_ellipse_path_z, generate_interpolated_path, generate_spiral_path
 from .utils import AppearanceOptModule, CameraOptModule, knn, rgb_to_sh, set_random_seed
 
@@ -56,11 +56,11 @@ class Config:
     # Path to the Mip-NeRF 360 dataset
     data_dir: str = "data/360_v2/garden"
     # Downsample factor for the dataset
-    data_factor: int = 4
+    data_factor: int = 1
     # Directory to save results
     result_dir: str = "results/garden"
-    # Every N images there is a test image
-    test_every: int = 8
+    # Every N images there is a test image, 0 (default) will use all images for training
+    test_every: int = 0
     # Random crop size for training  (experimental)
     patch_size: Optional[int] = None
     # A global scaler that applies to the scene size related parameters
@@ -74,7 +74,7 @@ class Config:
     # Mask GT RGB image during training for object-centric reconstruction
     mask_gt_image: bool = False
     # If set, don't perfrom pre-processing of GT RGB images and use the existing ones
-    reuse_processed_images: bool = True
+    reuse_processed_images: bool = False
 
     # Port for the viewer server
     port: int = 8080
@@ -188,10 +188,14 @@ class Config:
     # Compute color-corrected metrics (cc_psnr, cc_ssim, cc_lpips) during evaluation
     use_color_correction_metric: bool = False
 
-    # Enable depth loss. (experimental)
-    depth_loss: bool = False
+    # Enable depth loss between rendered depths and depths from sparse SfM points (experimental)
+    depth_point_loss: bool = False
+    # Enable depth loss between rendered depths and GT depth images (experimental)
+    depth_image_loss: bool = False
     # Weight for depth loss
     depth_lambda: float = 1e-2
+    # Let the pipeline know if poses, sparse points, and depth GT already in metric scale
+    metric_scale: bool = False
 
     # Dump information to tensorboard every this steps
     tb_every: int = 100
@@ -230,7 +234,7 @@ class Config:
 
 
 def create_splats_with_optimizers(
-    parser: Parser,
+    parser,
     init_type: str = "sfm",
     init_num_pts: int = 100_000,
     init_extent: float = 3.0,
@@ -353,7 +357,7 @@ class Runner:
             file.unlink()
 
         # Load data: Training data should contain initial points and colors.
-        self.parser = Parser(
+        self.parser = get_parser(cfg.data_dir)(
             data_dir=cfg.data_dir,
             factor=cfg.data_factor,
             normalize=cfg.normalize_world_space,
@@ -366,7 +370,8 @@ class Runner:
             self.parser,
             split="train",
             patch_size=cfg.patch_size,
-            load_depths=cfg.depth_loss,
+            load_point_depth=cfg.depth_point_loss,
+            load_image_depth=cfg.depth_image_loss,
         )
         self.valset = Dataset(self.parser, split="val")
         self.scene_scale = self.parser.scene_scale * 1.1 * cfg.global_scale
@@ -765,9 +770,12 @@ class Runner:
             exposure = (
                 data["exposure"].to(device) if "exposure" in data else None
             )  # [B,]
-            if cfg.depth_loss:
-                points = data["points"].to(device)  # [1, M, 2]
-                depths_gt = data["depths"].to(device)  # [1, M]
+
+            if cfg.depth_point_loss:
+                depth_pixels = data["depth_pixels"].to(device) # [1, M, 2]
+                depth_values = data["depth_values"].to(device) # [1, M]
+            if cfg.depth_image_loss:
+                depth_image = data["depth_image"].to(device) # [1, H, W, 1]
 
             height, width = pixels.shape[1:3]
 
@@ -790,7 +798,7 @@ class Runner:
                 near_plane=cfg.near_plane,
                 far_plane=cfg.far_plane,
                 image_ids=image_ids,
-                render_mode="RGB+ED" if cfg.depth_loss else "RGB",
+                render_mode="RGB+ED" if cfg.depth_point_loss or cfg.depth_image_loss else "RGB",
                 masks=masks,
                 frame_idcs=image_ids,
                 camera_idcs=data["camera_idx"].to(device),
@@ -819,25 +827,42 @@ class Runner:
                 colors.permute(0, 3, 1, 2), pixels.permute(0, 3, 1, 2), padding="valid"
             )
             loss = l1loss * (1.0 - cfg.ssim_lambda) + ssimloss * cfg.ssim_lambda
-            if cfg.depth_loss:
-                # query depths from depth map
-                points = torch.stack(
+            
+            if cfg.depth_point_loss:
+                # Prepare depth pixels for grid sampling into rendered depth map
+                depth_pixels = torch.stack(
                     [
-                        points[:, :, 0] / (width - 1) * 2 - 1,
-                        points[:, :, 1] / (height - 1) * 2 - 1,
+                        depth_pixels[:, :, 0] / (width - 1) * 2 - 1,
+                        depth_pixels[:, :, 1] / (height - 1) * 2 - 1,
                     ],
                     dim=-1,
-                )  # normalize to [-1, 1]
-                grid = points.unsqueeze(2)  # [1, M, 1, 2]
-                depths = F.grid_sample(
-                    depths.permute(0, 3, 1, 2), grid, align_corners=True
-                )  # [1, 1, M, 1]
+                ) # normalize to [-1, 1]
+                grid = depth_pixels.unsqueeze(2)  # [1, M, 1, 2]
+                depths = F.grid_sample(depths.permute(0, 3, 1, 2), grid, align_corners=True)  # [1, 1, M, 1]
                 depths = depths.squeeze(3).squeeze(1)  # [1, M]
                 # calculate loss in disparity space
                 disp = torch.where(depths > 0.0, 1.0 / depths, torch.zeros_like(depths))
-                disp_gt = 1.0 / depths_gt  # [1, M]
-                depthloss = F.l1_loss(disp, disp_gt) * self.scene_scale
-                loss += depthloss * cfg.depth_lambda
+                disp_gt = 1.0 / depth_values  # [1, M]
+
+                scale = 1.0 if cfg.metric_scale else self.scene_scale
+                depth_loss = F.l1_loss(disp, disp_gt) * scale
+                loss += depth_loss * cfg.depth_lambda
+            
+            if cfg.depth_image_loss:
+                depth_valid_mask = (depth_image > 0) & (depths > 0)
+                if depth_valid_mask.any():
+                    eps     = 1e-8
+                    disp    = 1.0 / (depths + eps)
+                    disp_gt = 1.0 / (depth_image + eps)
+
+                    max_disp = 1e3
+                    disp = torch.clamp(disp, max=max_disp)
+                    disp_gt = torch.clamp(disp_gt, max=max_disp)
+
+                    scale = 1.0 if cfg.metric_scale else self.scene_scale
+                    depth_loss = F.l1_loss(disp[depth_valid_mask], disp_gt[depth_valid_mask]) * scale
+                    loss += depth_loss * cfg.depth_lambda
+            
             if cfg.post_processing == "bilateral_grid":
                 post_processing_reg_loss = 10 * total_variation_loss(
                     self.post_processing_module.grids
@@ -858,15 +883,16 @@ class Runner:
             loss.backward()
 
             # Update progress bar with postfix loss
-            postfix_dict = { "SH": f"{sh_degree_to_use}", "Loss": f"{loss.item():.5f}" }
-            n_points = len(self.splats["means"])
-            postfix_dict["Points"] = f"{n_points}"
-            if cfg.depth_loss:
-                postfix_dict["Depth"] = f"{depthloss.item():.5f}"
-            if cfg.pose_opt and cfg.pose_noise:
-                pose_err = F.l1_loss(camtoworlds_gt, camtoworlds)
-                postfix_dict["Pose"] = f"{pose_err.item():.5f}"
-            pbar.set_postfix(postfix_dict)
+            if world_rank == 0 and step % 100 == 0:
+                postfix_dict = { "SH": f"{sh_degree_to_use}", "Loss": f"{loss.item():.5f}" }
+                n_points = len(self.splats["means"])
+                postfix_dict["Points"] = f"{n_points}"
+                if cfg.depth_point_loss or cfg.depth_image_loss:
+                    postfix_dict["Depth"] = f"{depth_loss.item():.5f}"
+                if cfg.pose_opt and cfg.pose_noise:
+                    pose_err = F.l1_loss(camtoworlds_gt, camtoworlds)
+                    postfix_dict["Pose"] = f"{pose_err.item():.5f}"
+                pbar.set_postfix(postfix_dict)
 
             # Update tensorboard scalar values
             if world_rank == 0 and cfg.tb_every > 0 and step % cfg.tb_every == 0:
@@ -876,8 +902,8 @@ class Runner:
                 self.writer.add_scalar("train/ssimloss", ssimloss.item(), step)
                 self.writer.add_scalar("train/num_GS", len(self.splats["means"]), step)
                 self.writer.add_scalar("train/mem", mem, step)
-                if cfg.depth_loss:
-                    self.writer.add_scalar("train/depthloss", depthloss.item(), step)
+                if cfg.depth_point_loss or cfg.depth_image_loss:
+                    self.writer.add_scalar("train/depthloss", depth_loss.item(), step)
                 if cfg.post_processing is not None:
                     self.writer.add_scalar(
                         "train/post_processing_reg_loss",

@@ -1,0 +1,297 @@
+import json
+
+from pathlib import Path
+from typing import List, Optional
+
+import imageio.v2 as imageio
+import open3d as o3d
+import numpy as np
+
+from pycolmap.rotation import Quaternion
+from tqdm import tqdm
+
+from .exif import compute_exposure_from_exif
+from .utils import process_input_images, process_input_depths
+
+
+def _read_keyframe_poses(pose_file):
+    poses = []
+    times = []
+
+    with open(pose_file, "r") as f:
+        for line in f:
+            line = line.strip()
+
+            # skip empty lines or comments
+            if not line or line.startswith("#"):
+                continue
+
+            parts = line.split()
+
+            if len(parts) != 8:
+                raise ValueError(f"Invalid line: {line}")
+            
+            times.append(int(parts[0]))
+
+            tx, ty, tz = map(float, parts[1:4])
+            qw, qx, qy, qz = map(float, parts[4:8]) # check the actual file for scalar order
+
+            t = np.array([tx, ty, tz])
+            R = Quaternion(np.array([qw, qx, qy, qz])).ToR()
+
+            T = np.eye(4)
+            T[:3, :3] = R
+            T[:3,  3] = t
+            poses.append(T)
+
+    return times, poses
+
+
+def _read_image_names(rgb_dir, kf_stamps):
+    names = []
+    
+    for stamp in kf_stamps:
+        image_file = rgb_dir / f"{stamp}.png"
+        if not image_file.exists():
+            raise ValueError(f"Missing image name ({image_file.name})")
+        names.append(image_file.name)
+
+    assert len(names) == len(kf_stamps), f"Inconsistent images and KF poses"
+    return names
+
+
+def _read_calibration(calib_file, factor):
+    Ks_dict = dict()
+    imsize_dict = dict() # width, height
+    params_dict = dict()
+
+    with open(calib_file, "r") as f:
+       data = json.load(f)
+
+    cam_data = data["value0"]["intrinsics"][0]
+    assert cam_data["camera_type"] == "pinhole"
+
+    intrinsics = cam_data["intrinsics"]
+    fx = intrinsics["fx"]
+    fy = intrinsics["fy"]
+    cx = intrinsics["cx"]
+    cy = intrinsics["cy"]
+
+    K = np.array([[fx, 0, cx], [0, fy, cy], [0, 0, 1]])
+    K[:2, :] /= factor
+    Ks_dict[0] = K
+
+    resolution = data["value0"]["resolution"][0]
+    width, height = resolution
+    imsize_dict[0] = (width // factor, height // factor)
+
+    params = np.empty(0, dtype=np.float32)
+    params_dict[0] = params
+
+    return Ks_dict, imsize_dict, params_dict
+
+
+def _read_points(pcd_dir, image_names, kf_poses):
+    points = []
+    points_rgb = []
+    point_indices = {}
+
+    global_offset = 0 # tracks index in concatenated array
+
+    for name, pose in tqdm(zip(image_names, kf_poses), desc="[>] Loading PCDs"):
+        stamp = Path(name).stem
+        pcd_file = pcd_dir / f"{stamp}.pcd"
+
+        if not pcd_file.exists():
+            print(f"[!] Skipping PCD file {pcd_file}: file not found")
+            point_indices[name] = np.empty((0,), dtype=np.int32)
+            continue
+
+        # Load PCD
+        pcd = o3d.io.read_point_cloud(str(pcd_file))
+        pts = np.asarray(pcd.points) # [N, 3]
+
+        if pts.shape[0] == 0:
+            point_indices[name] = np.empty((0,), dtype=np.int32)
+            continue
+
+        # Transform to world, pose is c2w [4, 4]
+        R = pose[:3, :3] # [3, 3]
+        t = pose[:3, 3]  # [3]
+
+        pts_world = (R @ pts.T).T + t  # [N, 3]
+        N = pts_world.shape[0]
+
+        inds = np.arange(global_offset, global_offset + N, dtype=np.int32)
+        point_indices[name] = inds
+
+        points.append(pts_world)
+        points_rgb.append(np.zeros((N, 3), dtype=np.float32))
+
+        global_offset += N
+
+    if len(points) == 0:
+        return (
+            np.empty((0, 3), dtype=np.float32),
+            np.empty((0, 3), dtype=np.float32),
+            point_indices,
+        )
+    
+    points = np.concatenate(points, axis=0).astype(np.float32)
+    points_rgb = np.concatenate(points_rgb, axis=0).astype(np.float32)
+
+    return points, points_rgb, point_indices
+
+
+class Parser:
+    """DSO-formatted parser"""
+
+    def __init__(
+        self,
+        data_dir: str,
+        factor: int = 1,
+        normalize: bool = False,
+        test_every: int = 8,
+        load_exposure: bool = False,
+        mask_gt_image: bool = False,
+        reuse_processed_images: bool = False,
+    ):
+        self.data_dir = data_dir
+        self.factor = factor
+        self.normalize = normalize
+        self.test_every = test_every
+        self.load_exposure = load_exposure
+
+        pose_file = Path(data_dir) / "output" / "poses.txt"
+        assert pose_file.exists(), f"{pose_file} not found"
+
+        kf_stamps, kf_poses = _read_keyframe_poses(pose_file)
+        assert len(kf_stamps) == len(kf_poses)
+        print(f"[>] Parser: {len(kf_stamps)} images, taken by 1 camera")
+
+        if len(kf_stamps) == 0:
+            raise ValueError(f"No images found in {data_dir}")
+        
+        Ks_dict, imsize_dict, params_dict = _read_calibration(Path(data_dir) / "calibration.json", factor)
+        mask_dict = { 0: None } # distorted images only
+
+        dso_image_dir = Path(data_dir) / "dso" / "rgb"
+        dso_depth_dir = Path(data_dir) / "dso" / "depth"
+        
+        # These two arrays match 1-to-1 (image and pose)
+        c2w_mats = np.stack(kf_poses, axis=0)
+        image_names = _read_image_names(dso_image_dir, kf_stamps)
+        camera_ids = [0] * len(image_names) # only use one camera at the moment
+
+        # Preprocess input images and depths
+        processed_image_dir = Path(data_dir) / "processed_images"
+        processed_depth_dir = Path(data_dir) / "processed_depths"
+        
+        image_paths = process_input_images(
+            str(dso_image_dir), str(processed_image_dir), image_names, factor, reuse=reuse_processed_images,
+            mask_image=mask_gt_image)
+        depth_paths = process_input_depths(
+            str(dso_depth_dir), str(processed_depth_dir), image_names, factor, reuse=reuse_processed_images,
+        )
+        
+        pcd_dir = Path(data_dir) / "output" / "clouds"
+        points, points_rgb, point_indices = _read_points(pcd_dir, image_names, kf_poses)
+        points_err = None
+
+        # Load extended metadata. Used by Bilarf dataset.
+        self.extconf = {
+            "spiral_radius_scale": 1.0,
+            "no_factor_suffix": False,
+        }
+        extconf_file = Path(data_dir) / "ext_metadata.json"
+        if extconf_file.exists():
+            with open(extconf_file) as f:
+                self.extconf.update(json.load(f))
+
+        # Load bounds if possible (only used in forward facing scenes).
+        self.bounds = np.array([0.01, 1.0])
+        pose_file = Path(data_dir) / "poses_bounds.npy"
+        if pose_file.exists():
+            self.bounds = np.load(pose_file)[:, -2:]
+
+        transform = np.eye(4)
+        if normalize:
+            # We're not supporting scene normalization for DSO dataset because of c2w convention
+            raise ValueError(f"Scene normalization is currently not supported for DSO dataset")
+
+        self.image_names = image_names  # List[str], (num_images,)
+        self.image_paths = image_paths  # List[str], (num_images,)
+        self.camtoworlds = c2w_mats     # np.ndarray, (num_images, 4, 4)
+        self.camera_ids  = camera_ids   # List[int], (num_images,)
+        self.Ks_dict     = Ks_dict      # Dict of camera_id -> K
+        self.params_dict = params_dict  # Dict of camera_id -> params
+        self.imsize_dict = imsize_dict  # Dict of camera_id -> (width, height)
+        self.mask_dict   = mask_dict    # Dict of camera_id -> mask
+        # Sparse SfM points
+        self.points = points                # np.ndarray, (num_points, 3) in world space
+        self.points_err = points_err        # np.ndarray, (num_points,)
+        self.points_rgb = points_rgb        # np.ndarray, (num_points, 3)
+        self.point_indices = point_indices  # Dict[str, np.ndarray], image_name -> [M,]
+        self.transform = transform          # np.ndarray, (4, 4)
+        # GT depth maps
+        self.depth_paths = depth_paths
+        self.depth_scale = 1.0 / 5000.0
+
+        # Create 0-based contiguous camera indices from camera_ids.
+        # This is useful for camera-based embeddings/modules.
+        unique_camera_ids = sorted(set(camera_ids))
+        self.camera_id_to_idx = { cid: idx for idx, cid in enumerate(unique_camera_ids) }
+        self.camera_indices = [self.camera_id_to_idx[cid] for cid in camera_ids]
+        self.num_cameras = len(unique_camera_ids)
+
+        # Load EXIF exposure data if requested
+        # Always read from original (non-downscaled) images since PNG doesn't support EXIF
+        self.exposure_values = [None] * len(image_paths)
+        if load_exposure:
+            exposure_values: List[Optional[float]] = []
+            for image_name in tqdm(image_names, desc="[>] Loading EXIF exposure", ncols=128):
+                original_path = Path(data_dir) / "dso" / "rgb" / image_name
+                exposure_values.append(compute_exposure_from_exif(original_path))
+
+            # Compute mean across all valid exposures and subtract
+            valid_exposures = [e for e in exposure_values if e is not None]
+            if valid_exposures:
+                exposure_mean = sum(valid_exposures) / len(valid_exposures)
+                self.exposure_values: List[Optional[float]] = [
+                    (e - exposure_mean) if e is not None else None
+                    for e in exposure_values
+                ]
+                print(
+                    f"[Parser] Loaded exposure for {len(valid_exposures)}/{len(exposure_values)} images "
+                    f"(mean={exposure_mean:.3f} EV)"
+                )
+            else:
+                self.exposure_values = [None] * len(exposure_values)
+                print("[Parser] No valid EXIF exposure data found in any image")
+
+        # Load one image to check the size. In the case of tanksandtemples dataset,
+        # the intrinsics stored in COLMAP corresponds to 2x upsampled images.
+        actual_image = imageio.imread(self.image_paths[0])[..., :3]
+        actual_height, actual_width = actual_image.shape[:2]
+        calib_width, calib_height = self.imsize_dict[self.camera_ids[0]]
+        s_height, s_width = actual_height / calib_height, actual_width / calib_width
+        if s_height != 1.0 or s_width != 1.0:
+            print(f"[!] Warning: actual image size ({actual_width}x{actual_height}) does not match scaled intrinsics ({calib_width}x{calib_height})")
+            print(f"[>] Rescaling intrinsics by ({s_width:.2f}x, {s_height:.2f}x)")
+        for camera_id, K in self.Ks_dict.items():
+            K[0, :] *= s_width
+            K[1, :] *= s_height
+            self.Ks_dict[camera_id] = K
+            width, height = self.imsize_dict[camera_id]
+            self.imsize_dict[camera_id] = (int(width * s_width), int(height * s_height))
+
+        # Undistortion, do nothing
+        self.mapx_dict = dict()
+        self.mapy_dict = dict()
+        self.roi_undist_dict = dict()
+
+        # Size of the scene measured by cameras
+        camera_locations = c2w_mats[:, :3, 3]
+        scene_center = np.mean(camera_locations, axis=0)
+        dists = np.linalg.norm(camera_locations - scene_center, axis=1)
+        self.scene_scale = np.max(dists)

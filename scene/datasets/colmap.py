@@ -1,107 +1,18 @@
 import json
 import os
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import List, Optional
 
 import cv2
 import imageio.v2 as imageio
 import numpy as np
-import torch
-from PIL import Image
 from pycolmap import SceneManager
 from tqdm import tqdm
 from typing_extensions import assert_never
 
 from .exif import compute_exposure_from_exif
-from .normalize import (
-    align_principal_axes,
-    similarity_from_cameras,
-    transform_cameras,
-    transform_points,
-)
-
-
-def _get_rel_paths(path_dir: str) -> List[str]:
-    """Recursively get relative paths of files in a directory."""
-    paths = []
-    for dp, _, fn in os.walk(path_dir):
-        for f in fn:
-            paths.append(os.path.relpath(os.path.join(dp, f), path_dir))
-    return paths
-
-
-def _resize_image_folder(image_dir: str, resized_dir: str, factor: int) -> str:
-    """Resize image folder."""
-    print(f"Downscaling images by {factor}x from {image_dir} to {resized_dir}.")
-    os.makedirs(resized_dir, exist_ok=True)
-
-    image_files = _get_rel_paths(image_dir)
-    for image_file in tqdm(image_files):
-        image_path = os.path.join(image_dir, image_file)
-        resized_path = os.path.join(
-            resized_dir, os.path.splitext(image_file)[0] + ".png"
-        )
-        if os.path.isfile(resized_path):
-            continue
-        image = imageio.imread(image_path)[..., :3]
-        resized_size = (
-            int(round(image.shape[1] / factor)),
-            int(round(image.shape[0] / factor)),
-        )
-        resized_image = np.array(
-            Image.fromarray(image).resize(resized_size, Image.BICUBIC)
-        )
-        imageio.imwrite(resized_path, resized_image)
-    return resized_dir
-
-
-def process_input_images(image_dir, target_dir, factor, reuse=False, mask_image=False, mask_dir=None):
-    output_dir = Path(target_dir)
-    os.makedirs(output_dir, exist_ok=True)
-
-    original_dir = Path(image_dir)
-    if (factor > 1):
-        print(f"[>] Training with images downscaled by {factor}x in {output_dir}")
-
-    for image_file in tqdm(original_dir.iterdir(), desc=f"[>] Processing", ncols=128):
-        # Skip if we hit some unexpected directory
-        if not image_file.is_file():
-            continue
-
-        # Also skip if we're being asked to reuse exiting ones
-        output_file = output_dir / f"{image_file.stem}.png"
-        if reuse and output_file.exists():
-            continue
-
-        alpha_file = None if not mask_dir else Path(mask_dir) / f"{image_file.stem}.png"
-        image = Image.open(str(image_file))
-        alpha = None if not alpha_file else Image.open(str(alpha_file))
-
-        if image.mode == 'RGBA':
-            r, g, b, a = image.split()
-            image = Image.merge("RGB", (r, g, b))
-            alpha = a if alpha is None else alpha # prioritize provided mask over alpha channel
-
-        # Mask GT images before resizing
-        if mask_image and alpha is not None:
-            image_np = np.array(image)[..., :3].astype(np.float32)
-            alpha_np = np.expand_dims(np.array(alpha), axis=-1).astype(np.float32)
-            rgb_masked = (image_np / 255.) * (alpha_np / np.max(alpha_np))
-            rgb_masked = np.clip(rgb_masked, 0., 1.)
-            image = Image.fromarray((rgb_masked * 255.).astype(np.uint8))
-
-        width, height = image.size
-        resolution = (width // factor, height // factor)
-        image = image.resize(resolution)
-
-        if alpha is not None:
-            alpha = alpha.resize(resolution, Image.Resampling.NEAREST)
-        else:
-            alpha = Image.new("L", resolution, 255)
-
-        image.putalpha(alpha)
-        image.save(str(output_file))
-    return target_dir
+from .normalize import align_principal_axes, similarity_from_cameras, transform_cameras, transform_points
+from .utils import process_input_images
 
 
 class Parser:
@@ -115,7 +26,7 @@ class Parser:
         test_every: int = 8,
         load_exposure: bool = False,
         mask_gt_image: bool = False,
-        reuse_processed_images: bool = True,
+        reuse_processed_images: bool = False,
     ):
         self.data_dir = data_dir
         self.factor = factor
@@ -232,19 +143,19 @@ class Parser:
         # Preprocess input images
         colmap_image_dir = os.path.join(data_dir, "images")
         if not os.path.exists(colmap_image_dir):
-            raise ValueError(f"[!] COLMAP image dir {colmap_image_dir} does not exist!")
-        image_dir = str(Path(colmap_image_dir).parent / "processed_images")
-        process_input_images(
-            colmap_image_dir, image_dir, factor, reuse=reuse_processed_images,
+            raise ValueError(f"COLMAP image dir {colmap_image_dir} does not exist!")
+        processed_image_dir = Path(colmap_image_dir).parent / "processed_images"
+        image_paths = process_input_images(
+            colmap_image_dir, str(processed_image_dir), image_names, factor, reuse=reuse_processed_images,
             mask_image=mask_gt_image)
 
         # Downsampled images may have different names vs images used for COLMAP,
         # so we need to map between the two sorted lists of files.
         # Both colmap_files and image_files are file names with suffix.
-        colmap_files = sorted(_get_rel_paths(colmap_image_dir))
-        image_files = sorted(_get_rel_paths(image_dir))
-        colmap_to_image = dict(zip(colmap_files, image_files))
-        image_paths = [os.path.join(image_dir, colmap_to_image[f]) for f in image_names]
+        # colmap_files = sorted(_get_rel_paths(colmap_image_dir))
+        # image_files = sorted(_get_rel_paths(processed_image_dir))
+        # colmap_to_image = dict(zip(colmap_files, image_files))
+        # image_paths = [os.path.join(processed_image_dir, colmap_to_image[Path(f).name]) for f in image_names]
 
         # 3D points and {image_name -> [point_idx]}
         points = manager.points3D.astype(np.float32)
@@ -296,16 +207,17 @@ class Parser:
         self.image_names = image_names  # List[str], (num_images,)
         self.image_paths = image_paths  # List[str], (num_images,)
         self.camtoworlds = camtoworlds  # np.ndarray, (num_images, 4, 4)
-        self.camera_ids = camera_ids  # List[int], (num_images,)
-        self.Ks_dict = Ks_dict  # Dict of camera_id -> K
+        self.camera_ids  = camera_ids   # List[int], (num_images,)
+        self.Ks_dict     = Ks_dict      # Dict of camera_id -> K
         self.params_dict = params_dict  # Dict of camera_id -> params
         self.imsize_dict = imsize_dict  # Dict of camera_id -> (width, height)
-        self.mask_dict = mask_dict  # Dict of camera_id -> mask
-        self.points = points  # np.ndarray, (num_points, 3)
-        self.points_err = points_err  # np.ndarray, (num_points,)
-        self.points_rgb = points_rgb  # np.ndarray, (num_points, 3)
+        self.mask_dict   = mask_dict    # Dict of camera_id -> mask
+        # Sparse SfM points
+        self.points = points                # np.ndarray, (num_points, 3)
+        self.points_err = points_err        # np.ndarray, (num_points,)
+        self.points_rgb = points_rgb        # np.ndarray, (num_points, 3)
         self.point_indices = point_indices  # Dict[str, np.ndarray], image_name -> [M,]
-        self.transform = transform  # np.ndarray, (4, 4)
+        self.transform = transform          # np.ndarray, (4, 4)
 
         # Create 0-based contiguous camera indices from COLMAP camera_ids.
         # This is useful for camera-based embeddings/modules.
@@ -340,12 +252,15 @@ class Parser:
         else:
             self.exposure_values = [None] * len(image_paths)
 
-        # load one image to check the size. In the case of tanksandtemples dataset, the
-        # intrinsics stored in COLMAP corresponds to 2x upsampled images.
+        # Load one image to check the size. In the case of tanksandtemples dataset,
+        # the intrinsics stored in COLMAP corresponds to 2x upsampled images.
         actual_image = imageio.imread(self.image_paths[0])[..., :3]
         actual_height, actual_width = actual_image.shape[:2]
         colmap_width, colmap_height = self.imsize_dict[self.camera_ids[0]]
         s_height, s_width = actual_height / colmap_height, actual_width / colmap_width
+        if s_height != 1.0 or s_width != 1.0:
+            print(f"[!] Warning: actual image size ({actual_width}x{actual_height}) does not match scaled COLMAP intrinsics ({colmap_width}x{colmap_height})")
+            print(f"[>] Rescaling intrinsics by ({s_width:.2f}x, {s_height:.2f}x)")
         for camera_id, K in self.Ks_dict.items():
             K[0, :] *= s_width
             K[1, :] *= s_height
@@ -427,129 +342,3 @@ class Parser:
         scene_center = np.mean(camera_locations, axis=0)
         dists = np.linalg.norm(camera_locations - scene_center, axis=1)
         self.scene_scale = np.max(dists)
-
-
-class Dataset:
-    """A simple dataset class."""
-
-    def __init__(
-        self,
-        parser: Parser,
-        split: str = "train",
-        patch_size: Optional[int] = None,
-        load_depths: bool = False,
-    ):
-        self.parser = parser
-        self.split = split
-        self.patch_size = patch_size
-        self.load_depths = load_depths
-        indices = np.arange(len(self.parser.image_names))
-        if self.parser.test_every <= 0 and split == "train":
-            self.indices = indices # get all training images if testing is disabled
-        elif self.parser.test_every <= 0 and split == "val":
-            self.indices = indices[indices % 5 == 0] # sample images like the old repo
-        elif split == "train":
-            self.indices = indices[indices % self.parser.test_every != 0]
-        else:
-            self.indices = indices[indices % self.parser.test_every == 0]
-
-    def __len__(self):
-        return len(self.indices)
-
-    def __getitem__(self, item: int) -> Dict[str, Any]:
-        index = self.indices[item]
-        image = imageio.imread(self.parser.image_paths[index])[..., :3]
-        camera_id = self.parser.camera_ids[index]
-        K = self.parser.Ks_dict[camera_id].copy()  # undistorted K
-        params = self.parser.params_dict[camera_id]
-        camtoworlds = self.parser.camtoworlds[index]
-        mask = self.parser.mask_dict[camera_id]
-
-        if len(params) > 0:
-            # Images are distorted. Undistort them.
-            mapx, mapy = (
-                self.parser.mapx_dict[camera_id],
-                self.parser.mapy_dict[camera_id],
-            )
-            image = cv2.remap(image, mapx, mapy, cv2.INTER_LINEAR)
-            x, y, w, h = self.parser.roi_undist_dict[camera_id]
-            image = image[y : y + h, x : x + w]
-
-        if self.patch_size is not None:
-            # Random crop.
-            h, w = image.shape[:2]
-            x = np.random.randint(0, max(w - self.patch_size, 1))
-            y = np.random.randint(0, max(h - self.patch_size, 1))
-            image = image[y : y + self.patch_size, x : x + self.patch_size]
-            K[0, 2] -= x
-            K[1, 2] -= y
-
-        data = {
-            "K": torch.from_numpy(K).float(),
-            "camtoworld": torch.from_numpy(camtoworlds).float(),
-            "image": torch.from_numpy(image).float(),
-            "image_id": item,  # the index of the image in the dataset
-            "camera_idx": self.parser.camera_indices[
-                index
-            ],  # 0-based contiguous camera index
-        }
-        if mask is not None:
-            data["mask"] = torch.from_numpy(mask).bool()
-
-        # Add exposure if available for this image
-        exposure = self.parser.exposure_values[index]
-        if exposure is not None:
-            data["exposure"] = torch.tensor(exposure, dtype=torch.float32)
-
-        if self.load_depths:
-            # projected points to image plane to get depths
-            worldtocams = np.linalg.inv(camtoworlds)
-            image_name = self.parser.image_names[index]
-            point_indices = self.parser.point_indices[image_name]
-            points_world = self.parser.points[point_indices]
-            points_cam = (worldtocams[:3, :3] @ points_world.T + worldtocams[:3, 3:4]).T
-            points_proj = (K @ points_cam.T).T
-            points = points_proj[:, :2] / points_proj[:, 2:3]  # (M, 2)
-            depths = points_cam[:, 2]  # (M,)
-            # filter out points outside the image
-            selector = (
-                (points[:, 0] >= 0)
-                & (points[:, 0] < image.shape[1])
-                & (points[:, 1] >= 0)
-                & (points[:, 1] < image.shape[0])
-                & (depths > 0)
-            )
-            points = points[selector]
-            depths = depths[selector]
-            data["points"] = torch.from_numpy(points).float()
-            data["depths"] = torch.from_numpy(depths).float()
-
-        return data
-
-
-if __name__ == "__main__":
-    import argparse
-
-    import imageio.v2 as imageio
-
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--data_dir", type=str, default="data/360_v2/garden")
-    parser.add_argument("--factor", type=int, default=4)
-    args = parser.parse_args()
-
-    # Parse COLMAP data.
-    parser = Parser(
-        data_dir=args.data_dir, factor=args.factor, normalize=True, test_every=8
-    )
-    dataset = Dataset(parser, split="train", load_depths=True)
-    print(f"Dataset: {len(dataset)} images.")
-
-    writer = imageio.get_writer("results/points.mp4", fps=30)
-    for data in tqdm(dataset, desc="Plotting points"):
-        image = data["image"].numpy().astype(np.uint8)
-        points = data["points"].numpy()
-        depths = data["depths"].numpy()
-        for x, y in points:
-            cv2.circle(image, (int(x), int(y)), 2, (255, 0, 0), -1)
-        writer.append_data(image)
-    writer.close()
