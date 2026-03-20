@@ -57,4 +57,12 @@ if __name__ == "__main__":
     if cfg.with_ut:
         assert cfg.with_eval3d, "Training with UT requires setting `with_eval3d` flag."
 
+    if cfg.post_processing == "ppisp":
+        import torch
+        import warnings
+        from packaging import version
+        # PPISP modules uses SequentialLR which emits an anoying warning when PyTorch < 2.9
+        if version.parse(torch.__version__) < version.parse("2.9"):
+            warnings.filterwarnings("ignore", category=UserWarning, module="torch.optim.lr_scheduler")
+
     cli(main, cfg, verbose=True)

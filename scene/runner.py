@@ -70,7 +70,7 @@ class Config:
     # Camera model
     camera_model: Literal["pinhole", "ortho", "fisheye"] = "pinhole"
     # Load EXIF exposure metadata from images (if available)
-    load_exposure: bool = False
+    load_exposure: bool = True
     # Mask GT RGB image during training for object-centric reconstruction
     mask_gt_image: bool = False
     # If set, don't perfrom pre-processing of GT RGB images and use the existing ones
@@ -375,7 +375,7 @@ class Runner:
         )
         self.valset = Dataset(self.parser, split="val")
         self.scene_scale = self.parser.scene_scale * 1.1 * cfg.global_scale
-        print("[>] Scene scale:", self.scene_scale)
+        print("[>] Scene half extent:", self.scene_scale)
 
         if self.parser.num_cameras > 1 and cfg.batch_size != 1:
             raise ValueError(
@@ -498,8 +498,7 @@ class Runner:
             ppisp_config = PPISPConfig(
                 use_controller=cfg.ppisp_use_controller,
                 controller_distillation=cfg.ppisp_controller_distillation,
-                controller_activation_ratio=cfg.ppisp_controller_activation_num_steps
-                / cfg.max_steps,
+                controller_activation_ratio=cfg.ppisp_controller_activation_num_steps / cfg.max_steps,
             )
             self.post_processing_module = PPISP(
                 num_cameras=self.parser.num_cameras,
@@ -563,7 +562,7 @@ class Runner:
             param.requires_grad = False
 
         self._gaussians_frozen = True
-        print("[Distillation] Gaussian parameters frozen")
+        tqdm.write("[>] Distillation: Gaussian parameters frozen")
 
     def rasterize_splats(
         self,
@@ -1262,7 +1261,7 @@ class Runner:
         """Export PPISP visualization reports (PDF) and parameter JSON."""
         if self.cfg.post_processing != "ppisp":
             return
-        tqdm.write("Exporting PPISP reports...")
+        print("Exporting PPISP reports for all cameras...")
 
         # Compute frames per camera from training dataset
         num_cameras = self.parser.num_cameras
@@ -1284,9 +1283,9 @@ class Runner:
             output_dir,
             camera_names=camera_names,
         )
-        tqdm.write(f"PPISP reports saved to {output_dir}")
+        print(f"PPISP reports saved to {output_dir}")
         for path in pdf_paths:
-            tqdm.write(f"  - {path.name}")
+            print(f" - {path.name}")
 
     @torch.no_grad()
     def run_compression(self, step: int):

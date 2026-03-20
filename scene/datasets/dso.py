@@ -1,4 +1,5 @@
 import json
+import math
 
 from pathlib import Path
 from typing import List, Optional
@@ -22,7 +23,7 @@ def _read_keyframe_poses(pose_file):
         for line in f:
             line = line.strip()
 
-            # skip empty lines or comments
+            # Skip empty lines or comments
             if not line or line.startswith("#"):
                 continue
 
@@ -98,7 +99,7 @@ def _read_points(pcd_dir, image_names, kf_poses):
 
     global_offset = 0 # tracks index in concatenated array
 
-    for name, pose in tqdm(zip(image_names, kf_poses), desc="[>] Loading PCDs"):
+    for name, pose in zip(image_names, kf_poses):
         stamp = Path(name).stem
         pcd_file = pcd_dir / f"{stamp}.pcd"
 
@@ -126,7 +127,8 @@ def _read_points(pcd_dir, image_names, kf_poses):
         point_indices[name] = inds
 
         points.append(pts_world)
-        points_rgb.append(np.zeros((N, 3), dtype=np.float32))
+        # Don't initialize colors to pure black which otherwise would break PPISP gradient flows
+        points_rgb.append(np.random.uniform(0.0, 0.05, size=(N, 3)).astype(np.float32))
 
         global_offset += N
 
@@ -141,6 +143,38 @@ def _read_points(pcd_dir, image_names, kf_poses):
     points_rgb = np.concatenate(points_rgb, axis=0).astype(np.float32)
 
     return points, points_rgb, point_indices
+
+
+def _read_shutter_times(times_file, kf_stamps):
+    # Read all shutter times first
+    stamp_to_time = {}
+    with open(times_file, "r") as f:
+        for line in f:
+            line = line.strip()
+
+            # Skip empty lines or comments
+            if not line or line.startswith("#"):
+                continue
+
+            parts = line.split()
+
+            if len(parts) != 3:
+                raise ValueError(f"Invalid line: {line}")
+            
+            stamp_to_time[int(parts[0])] = float(parts[2])
+
+    shutter_times = []
+    for stamp in kf_stamps:
+        if not stamp in stamp_to_time:
+            print(f"[!] Warning: missing shutter time for frame at timestamp {stamp}")
+            shutter_times.append(None)
+            continue
+
+        # Convert milliseconds to seconds
+        shutter_times.append(stamp_to_time[stamp] * 1e-3)
+    
+    assert len(shutter_times) == len(kf_stamps)
+    return shutter_times
 
 
 class Parser:
@@ -244,16 +278,13 @@ class Parser:
         self.camera_indices = [self.camera_id_to_idx[cid] for cid in camera_ids]
         self.num_cameras = len(unique_camera_ids)
 
-        # Load EXIF exposure data if requested
-        # Always read from original (non-downscaled) images since PNG doesn't support EXIF
+        # Load exposure data if requested, we read from the exported shutter times
         self.exposure_values = [None] * len(image_paths)
         if load_exposure:
-            exposure_values: List[Optional[float]] = []
-            for image_name in tqdm(image_names, desc="[>] Loading EXIF exposure", ncols=128):
-                original_path = Path(data_dir) / "dso" / "rgb" / image_name
-                exposure_values.append(compute_exposure_from_exif(original_path))
+            times_file = Path(data_dir) / "dso" / "times.txt"
+            shutter_times = _read_shutter_times(times_file, kf_stamps) # in seconds
+            exposure_values = [math.log2(t) if t is not None and t > 0.0 else None for t in shutter_times]
 
-            # Compute mean across all valid exposures and subtract
             valid_exposures = [e for e in exposure_values if e is not None]
             if valid_exposures:
                 exposure_mean = sum(valid_exposures) / len(valid_exposures)
@@ -262,12 +293,13 @@ class Parser:
                     for e in exposure_values
                 ]
                 print(
-                    f"[Parser] Loaded exposure for {len(valid_exposures)}/{len(exposure_values)} images "
+                    f"[>] Parser: loaded exposure for {len(valid_exposures)}/{len(exposure_values)} images "
                     f"(mean={exposure_mean:.3f} EV)"
                 )
+
             else:
                 self.exposure_values = [None] * len(exposure_values)
-                print("[Parser] No valid EXIF exposure data found in any image")
+                print("[>] Parser: no valid EXIF exposure data found in any image")
 
         # Load one image to check the size. In the case of tanksandtemples dataset,
         # the intrinsics stored in COLMAP corresponds to 2x upsampled images.

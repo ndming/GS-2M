@@ -243,12 +243,12 @@ class Parser:
                     for e in exposure_values
                 ]
                 print(
-                    f"[Parser] Loaded exposure for {len(valid_exposures)}/{len(exposure_values)} images "
+                    f"[>] Parser: loaded exposure for {len(valid_exposures)}/{len(exposure_values)} images "
                     f"(mean={exposure_mean:.3f} EV)"
                 )
             else:
                 self.exposure_values = [None] * len(exposure_values)
-                print("[Parser] No valid EXIF exposure data found in any image.")
+                print("[>] Parser: no valid EXIF exposure data found in any image")
         else:
             self.exposure_values = [None] * len(image_paths)
 
