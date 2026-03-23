@@ -85,9 +85,9 @@ git clone https://github.com/ZhengPeng7/BiRefNet.git scripts/birefnet
 # - if -o is omitted, the output dir is created at the same level as the input image dir
 # - if -w is omitted, the model will fetch weights from HuggingFace
 # On Linux:
-PYTHONPATH=scripts/birefnet python scripts/mask.py -i /path/to/images [-o /path/to/output -w /path/to/weight]
+PYTHONPATH=scripts/birefnet python scripts/masking.py -i /path/to/images [-o /path/to/output -w /path/to/weight]
 # On Windows (PowerShell)
-$env:PYTHONPATH="scripts\birefnet"; python scripts/mask.py -i /path/to/images [-o /path/to/output -w /path/to/weight]
+$env:PYTHONPATH="scripts\birefnet"; python scripts/masking.py -i /path/to/images [-o /path/to/output -w /path/to/weight]
 
 # Now train using the foreground masks to remove background in the extracted mesh
 # If the output masks in the previous step were saved to a custom location not
