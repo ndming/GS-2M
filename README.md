@@ -145,6 +145,11 @@ improve robustness to noise but blur fine details.
 
 </details>
 
+### Export Gaussian scene as USDZ
+```bash
+python scripts/export/usd.py -i <path/to>/point_cloud_30000.ply -m <path/to>/mesh.ply [-o <path/to>/scene.usdz --collision --invisible]
+```
+
 ## Evaluation
 Please follow these steps to reproduce the evaluation results.
 
