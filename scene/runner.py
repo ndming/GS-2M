@@ -192,10 +192,19 @@ class Config:
     depth_point_loss: bool = False
     # Enable depth loss between rendered depths and GT depth images (experimental)
     depth_image_loss: bool = False
+    # The distance beyond which GT depth values are considered invalid
+    depth_image_max_distance: float = 10.0
     # Weight for depth loss
     depth_lambda: float = 1e-2
     # Let the pipeline know if poses, sparse points, and depth GT already in metric scale
     metric_scale: bool = False
+
+    # Mutli-view observation trimming
+    multi_view_observe_trim: bool = False
+    # Enforce disk-like Gaussians (planar loss), 0 to disable
+    planar_reg: float = 0.0
+    # Enforce depth normal consistency, 0 to disable
+    depth_normal_lambda: float = 0.0
 
     # Dump information to tensorboard every this steps
     tb_every: int = 100
@@ -797,7 +806,7 @@ class Runner:
                 near_plane=cfg.near_plane,
                 far_plane=cfg.far_plane,
                 image_ids=image_ids,
-                render_mode="RGB+ED" if cfg.depth_point_loss or cfg.depth_image_loss else "RGB",
+                render_mode="RGB+PD" if cfg.depth_point_loss or cfg.depth_image_loss else "RGB",
                 masks=masks,
                 frame_idcs=image_ids,
                 camera_idcs=data["camera_idx"].to(device),
@@ -848,18 +857,10 @@ class Runner:
                 loss += depth_loss * cfg.depth_lambda
             
             if cfg.depth_image_loss:
-                depth_valid_mask = (depth_image > 0) & (depths > 0)
+                depth_valid_mask = (depth_image > 0) & (depth_image < cfg.depth_image_max_distance) & (depths > 0)
                 if depth_valid_mask.any():
-                    eps     = 1e-8
-                    disp    = 1.0 / (depths + eps)
-                    disp_gt = 1.0 / (depth_image + eps)
-
-                    max_disp = 1e3
-                    disp = torch.clamp(disp, max=max_disp)
-                    disp_gt = torch.clamp(disp_gt, max=max_disp)
-
                     scale = 1.0 if cfg.metric_scale else self.scene_scale
-                    depth_loss = F.l1_loss(disp[depth_valid_mask], disp_gt[depth_valid_mask]) * scale
+                    depth_loss = F.l1_loss(depths[depth_valid_mask], depth_image[depth_valid_mask]) * scale
                     loss += depth_loss * cfg.depth_lambda
             
             if cfg.post_processing == "bilateral_grid":
