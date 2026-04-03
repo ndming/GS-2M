@@ -9,18 +9,22 @@ import open3d as o3d
 import numpy as np
 
 from pycolmap.rotation import Quaternion
-from tqdm import tqdm
-
-from .exif import compute_exposure_from_exif
 from .utils import process_input_images, process_input_depths
 
 
-def _read_keyframe_poses(pose_file):
+def _read_keyframe_poses(pose_file, stride=1, max=0, offset=0):
     poses = []
     times = []
 
     with open(pose_file, "r") as f:
-        for line in f:
+        for id, line in enumerate(f):
+            if id / stride < offset:
+                continue
+            if id % stride != 0:
+                continue
+            if max > 0 and id / stride > max:
+                break 
+
             line = line.strip()
 
             # Skip empty lines or comments
@@ -128,7 +132,7 @@ def _read_points(pcd_dir, image_names, kf_poses):
 
         points.append(pts_world)
         # Don't initialize colors to pure black which otherwise would break PPISP gradient flows
-        points_rgb.append(np.random.uniform(0.0, 0.05, size=(N, 3)).astype(np.float32))
+        points_rgb.append(np.random.uniform(0.0, 0.5, size=(N, 3)).astype(np.float32))
 
         global_offset += N
 
@@ -145,9 +149,10 @@ def _read_points(pcd_dir, image_names, kf_poses):
     return points, points_rgb, point_indices
 
 
-def _read_shutter_times(times_file, kf_stamps):
+def _read_shutter_meta(times_file, kf_stamps):
     # Read all shutter times first
     stamp_to_time = {}
+    stamp_to_gain = {}
     with open(times_file, "r") as f:
         for line in f:
             line = line.strip()
@@ -158,23 +163,35 @@ def _read_shutter_times(times_file, kf_stamps):
 
             parts = line.split()
 
-            if len(parts) != 3:
+            if len(parts) != 4:
                 raise ValueError(f"Invalid line: {line}")
             
             stamp_to_time[int(parts[0])] = float(parts[2])
+            stamp_to_gain[int(parts[0])] = float(parts[3])
 
     shutter_times = []
+    shutter_gains = []
     for stamp in kf_stamps:
         if not stamp in stamp_to_time:
             print(f"[!] Warning: missing shutter time for frame at timestamp {stamp}")
             shutter_times.append(None)
-            continue
+        else:
+            # Convert milliseconds to seconds
+            shutter_times.append(stamp_to_time[stamp] * 1e-3)
 
-        # Convert milliseconds to seconds
-        shutter_times.append(stamp_to_time[stamp] * 1e-3)
+        if not stamp in stamp_to_gain:
+            print(f"[!] Warning: missing shutter gain for frame at timestamp {stamp}")
+            shutter_gains.append(None)
+        else:
+            # Conver mDB -> DB -> linear gain
+            gain_db = stamp_to_gain[stamp] * 1e-3
+            gain_linear = 10 ** (gain_db / 20.0)
+            shutter_gains.append(gain_linear)
     
     assert len(shutter_times) == len(kf_stamps)
-    return shutter_times
+    assert len(shutter_gains) == len(kf_stamps)
+
+    return shutter_times, shutter_gains
 
 
 class Parser:
@@ -199,7 +216,7 @@ class Parser:
         pose_file = Path(data_dir) / "output" / "poses.txt"
         assert pose_file.exists(), f"{pose_file} not found"
 
-        kf_stamps, kf_poses = _read_keyframe_poses(pose_file)
+        kf_stamps, kf_poses = _read_keyframe_poses(pose_file, stride=4)
         assert len(kf_stamps) == len(kf_poses)
         print(f"[>] Parser: {len(kf_stamps)} images, taken by 1 camera")
 
@@ -282,8 +299,12 @@ class Parser:
         self.exposure_values = [None] * len(image_paths)
         if load_exposure:
             times_file = Path(data_dir) / "dso" / "times.txt"
-            shutter_times = _read_shutter_times(times_file, kf_stamps) # in seconds
-            exposure_values = [math.log2(t) if t is not None and t > 0.0 else None for t in shutter_times]
+            shutter_times, shutter_gains = _read_shutter_meta(times_file, kf_stamps)
+            exposure_values = [
+                math.log2((t / (2.2 ** 2)) * g * 100.0) # Using hardcoded aperture f/2.2
+                if t is not None and t > 0.0 and g is not None else None 
+                for t, g in zip(shutter_times, shutter_gains)
+            ]
 
             valid_exposures = [e for e in exposure_values if e is not None]
             if valid_exposures:
