@@ -3,11 +3,27 @@
 ![cover](media/cover.png)
 
 ## Installation
-The code has been tested on Windows and Linux.
+> [!IMPORTANT]  
+> As part of the migration to [gsplat](https://docs.gsplat.studio/main/), we recommend using CUDA `12.4` as the minimum.
 
-In general, you will need a working C++ compiler to build all CUDA submodules:
-- Windows: please make sure your Visual Studio version is `<=17.9.7` (MSVC `<=19.39`), as newer VS versions require CUDA `>=12.4` (older VS BuildTools are available [here](https://learn.microsoft.com/en-us/visualstudio/releases/2022/release-history)). Though it is not guaranteed, more recent combinations of CUDA and VS should work fine.
-- Linux: a recent version of GCC is sufficient (we tested with `11.4`)
+Please make sure you have a working C++ compiler compatible with your preferred CUDA version. This usually means using
+the default GCC version on Linux or installing the correct version of Visual Studio [BuildTools](https://learn.microsoft.com/en-us/visualstudio/releases/2022/release-history) on Windows.
+
+<details>
+<summary><span style="font-weight: bold;">Compatibility matrix between MSVC and CUDA for Windows installation</span></summary>
+
+| **MSVC** | **CUDA** |
+|----------|----------|
+| `19.44` (VS `17.14`) | Minimum `12.4` |
+| `19.43` (VS `17.13`) | Minimum `12.4` |
+| `19.42` (VS `17.12`) | Minimum `12.4` |
+| `19.41` (VS `17.11`) | Minimum `12.4` |
+| `19.40` (VS `17.10`) | Minimum `11.6` |
+| `19.39` (VS `17.9`)  | Minimum `11.6` |
+| `19.38` (VS `17.8`)  | Minimum `11.6` |
+
+</details>
+
 
 Clone the repo and submodules:
 ```bash
@@ -15,9 +31,13 @@ git clone https://github.com/ndming/GS-2M.git --recursive
 cd GS-2M
 ```
 
-Please use Python [venv](https://docs.python.org/3/library/venv.html) to manage your local environment:
+### Installing to a Python virtual environment
+This installation path is recommended if your installed CUDA is already available system-wide, or when your GPU driver
+is not compatible with CUDA less than `12.8` (common for Blackwell generations). Additionally, you will have the freedom
+to choose the PyTorch version suitable with your CUDA.
+
+Create a local [venv](https://docs.python.org/3/library/venv.html) with `pip<=25.2`:
 ```bash
-# Please make sure the created venv has pip<=25.2
 python -m venv .venvs/gs2m
 
 # Activate on Linux
@@ -30,12 +50,12 @@ source .venvs/gs2m/bin/activate
 pip install -U setuptools==68 wheel
 ```
 
-Install `numpy<2.0.0`:
+Pin to `numpy<2.0.0` before installing PyTorch:
 ```bash
 pip install numpy==1.26.4
 ```
 
-Install a version of [PyTorch and TorchVision](https://pytorch.org/get-started/previous-versions/) compatible with your CUDA version (cu12.8 as an example):
+Install a version of [PyTorch and TorchVision](https://pytorch.org/get-started/previous-versions/) compatible with your CUDA version (`cu12.8` as an example):
 ```bash
 pip install torch==2.7.1 torchvision==0.22.1 torchaudio==2.7.1 --index-url https://download.pytorch.org/whl/cu128
 ```
@@ -46,10 +66,44 @@ pip install -r requirements.txt --no-build-isolation # see requirements.txt for 
 ```
 
 ## Usage
-Please follow [3DGS](https://github.com/graphdeco-inria/gaussian-splatting)'s instructions to prepare training data for your own scene.
+As with other Gaussian splatting pipelines, reconstructing a scene from multi-view images involves three key steps:
+- Structure from Motion (SfM)
+- Training Gaussians
+- Mesh extraction: this is specific to surface reconstruction tasks, including GS-2M
 
-A COLMAP-prepared training directory for `GS-2M` may look like the following. Note that `masks` is completely optional.
-If you have foreground masks of the target object and want to use them, put them as shown below. 
+### Structure from Motion
+SfM prepares training data from unposed images, for which [COLMAP](https://github.com/colmap/colmap) is the recommended choice.
+
+While you can follow the instructions from the original [3DGS](https://github.com/graphdeco-inria/gaussian-splatting) repo
+to run COLMAP for your scene, we prepared an automatic COLMAP run script for convenience. It is based on the original `convert.py` script of 3DGS, modified to account for the new features of COLMAP `4.0` such as global mapping (GLOMAP) or neural feature
+extraction and matching from [ALIKED](https://github.com/Shiaoming/ALIKED) and [LightGlue](https://github.com/cvg/lightglue).
+
+First, please follow COLMAP's [offical installation guide](https://colmap.github.io/install.html) to install the base
+COLMAP binary with version `4.0` as the minimum.
+
+Once done, organize your images with the following structure:
+```
+scene/
+└── input/
+    ├── 001.jpg
+    ├── 002.jpg
+    └── ...
+```
+
+Run the following command to begin the SfM process (make sure the installed `gs2m` environment is activated)
+```bash
+python scripts/colmap.py --source_path <path/to/scene>
+```
+
+Useful optional parameters for `scripts/colmap.py`:
+- `--sample_from`: prepare a fresh `input` directory under `scene` by sampling frames under a directory or from a video
+whose path is specified with this parameter
+- `--sample_interval`: sample frames every this interval, only applies if `--sample_from` is not empty
+- `--colmap_feature_extraction`: one of `SIFT`, `ALIKED_N16ROT`, or `ALIKED_N32`; default to `SIFT`
+- `--colmap_feature_matching`: one of `SIFT_BRUTEFORCE`, `SIFT_LIGHTGLUE`, `ALIKED_BRUTEFORCE`, or `ALIKED_LIGHTGLUE`; default to `SIFT_BRUTEFORCE`
+
+A COLMAP-prepared training directory for GS-2M may look like the following. Note that `masks` is completely optional.
+If you have foreground masks of the target object, organize them as shown below. 
 ```
 scene/
 ├── images/
@@ -81,19 +135,13 @@ git clone https://github.com/ZhengPeng7/BiRefNet.git scripts/birefnet
 # Link: https://drive.google.com/drive/folders/1s2Xe0cjq-2ctnJBR24563yMSCOu4CcxM
 # We recommend using the general checkpoint: BiRefNet_HR-general-epoch_130.pth
 
-# Once you have obtained undistorted RGB images from COLMAP, run the following script
+# Once you have obtained undistorted RGB images from COLMAP, run the following script (with gs2m activated)
 # - if -o is omitted, the output dir is created at the same level as the input image dir
 # - if -w is omitted, the model will fetch weights from HuggingFace
 # On Linux:
-PYTHONPATH=scripts/birefnet python scripts/masking.py -i /path/to/images [-o /path/to/output -w /path/to/weight]
+PYTHONPATH=scripts/birefnet python scripts/masking.py -i </path/to/scene>/images [-o /path/to/output -w /path/to/weight]
 # On Windows (PowerShell)
-$env:PYTHONPATH="scripts\birefnet"; python scripts/masking.py -i /path/to/images [-o /path/to/output -w /path/to/weight]
-
-# Now train using the foreground masks to remove background in the extracted mesh
-# If the output masks in the previous step were saved to a custom location not
-# within the source dir (the same place as images), please provide an absolute path
-python train.py ... --masks /path/to/mask/dir --mask_gt
-
+$env:PYTHONPATH="scripts\birefnet"; python scripts/masking.py -i </path/to/scene>/images [-o /path/to/output -w /path/to/weight]
 ```
 
 </details>
