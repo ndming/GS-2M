@@ -32,9 +32,7 @@ def _read_keyframe_poses(pose_file, stride=1, max=0, offset=0):
                 continue
 
             parts = line.split()
-
-            if len(parts) != 8:
-                raise ValueError(f"Invalid line: {line}")
+            assert len(parts) == 8, f"Invalid line: {line}"
             
             times.append(int(parts[0]))
 
@@ -63,6 +61,43 @@ def _read_image_names(rgb_dir, kf_stamps):
 
     assert len(names) == len(kf_stamps), f"Inconsistent images and KF poses"
     return names
+
+
+def _read_intrinsics(intrinsics_file, kf_stamps, factor=1):
+    Ks_dict = dict()
+    imsize_dict = dict() # width, height
+    params_dict = dict()
+    mask_dict = dict()
+
+    with open(intrinsics_file, "r") as f:
+        for id, line in enumerate(f):
+            line = line.strip()
+
+            # Skip empty lines or comments
+            if not line or line.startswith("#"):
+                continue
+
+            parts = line.split()
+            assert len(parts) == 7, f"Invalid line: {line}"
+
+            stamp = int(parts[0])
+            if not stamp in kf_stamps:
+                continue
+
+            fx, fy, cx, cy = map(float, parts[1:5])
+            K = np.array([[fx, 0, cx], [0, fy, cy], [0, 0, 1]])
+            K[:2, :] /= factor
+            Ks_dict[id] = K
+
+            width, height = map(int, parts[5:7])
+            imsize_dict[id] = (width // factor, height // factor)
+
+            params = np.empty(0, dtype=np.float32)
+            params_dict[id] = params
+            mask_dict[id] = None  # distorted images only
+    
+    assert len(Ks_dict) == len(kf_stamps)
+    return Ks_dict, imsize_dict, params_dict, mask_dict
 
 
 def _read_calibration(calib_file, factor):
@@ -218,13 +253,16 @@ class Parser:
 
         kf_stamps, kf_poses = _read_keyframe_poses(pose_file, stride=4)
         assert len(kf_stamps) == len(kf_poses)
-        print(f"[>] Parser: {len(kf_stamps)} images, taken by 1 camera")
 
         if len(kf_stamps) == 0:
             raise ValueError(f"No images found in {data_dir}")
         
         Ks_dict, imsize_dict, params_dict = _read_calibration(Path(data_dir) / "calibration.json", factor)
         mask_dict = { 0: None } # distorted images only
+        # intrinsics_file = Path(data_dir) / "output" / "intrinsics.txt"
+        # Ks_dict, imsize_dict, params_dict, mask_dict = _read_intrinsics(intrinsics_file, kf_stamps, factor)
+        # camera_ids = list(Ks_dict.keys())
+        print(f"[>] Parser: {len(kf_stamps)} images, taken by {len(Ks_dict)} camera")
 
         dso_image_dir = Path(data_dir) / "dso" / "rgb"
         dso_depth_dir = Path(data_dir) / "dso" / "depth"
@@ -235,8 +273,8 @@ class Parser:
         camera_ids = [0] * len(image_names) # only use one camera at the moment
 
         # Preprocess input images and depths
-        processed_image_dir = Path(data_dir) / "processed_images"
-        processed_depth_dir = Path(data_dir) / "processed_depths"
+        processed_image_dir = Path(data_dir) / f"processed_images_{factor}"
+        processed_depth_dir = Path(data_dir) / f"processed_depths_{factor}"
         
         image_paths = process_input_images(
             str(dso_image_dir), str(processed_image_dir), image_names, factor, reuse=reuse_processed_images,

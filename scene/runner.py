@@ -37,7 +37,7 @@ from fused_ssim import fused_ssim
 
 from .datasets import Dataset, get_parser
 from .datasets.traj import generate_ellipse_path_z, generate_interpolated_path, generate_spiral_path
-from .utils import AppearanceOptModule, CameraOptModule, knn, rgb_to_sh, set_random_seed
+from .utils import AppearanceOptModule, CameraOptModule, knn, rgb_to_sh, set_random_seed, fix_normal_coordinates
 
 
 @dataclass
@@ -117,7 +117,7 @@ class Config:
     # Near plane clipping distance
     near_plane: float = 0.01
     # Far plane clipping distance
-    far_plane: float = 1e10
+    far_plane: float = 100.0
 
     # Strategy for GS densification
     strategy: Union[DefaultStrategy, MCMCStrategy] = field(
@@ -192,6 +192,8 @@ class Config:
     depth_point_loss: bool = False
     # Enable depth loss between rendered depths and GT depth images (experimental)
     depth_image_loss: bool = False
+    # Start applying depth image loss from this step (only applies when depth_image_loss=True)
+    depth_image_loss_from: int = 7000
     # The distance beyond which GT depth values are considered invalid
     depth_image_max_distance: float = 10.0
     # Weight for depth loss
@@ -205,6 +207,8 @@ class Config:
     planar_reg: float = 0.0
     # Enforce depth normal consistency, 0 to disable
     depth_normal_lambda: float = 0.0
+    # Start applying depth normal consistency loss from this step (only applies when depth_normal_lambda > 0)
+    depth_normal_loss_from: int = 7000
 
     # Dump information to tensorboard every this steps
     tb_every: int = 100
@@ -382,7 +386,7 @@ class Runner:
             load_point_depth=cfg.depth_point_loss,
             load_image_depth=cfg.depth_image_loss,
         )
-        self.valset = Dataset(self.parser, split="val")
+        self.valset = Dataset(self.parser, split="val", load_image_depth=cfg.depth_image_loss)
         self.scene_scale = self.parser.scene_scale * 1.1 * cfg.global_scale
         print("[>] Scene half extent:", self.scene_scale)
 
@@ -558,6 +562,10 @@ class Runner:
         # Track if Gaussians are frozen (for controller distillation)
         self._gaussians_frozen = False
 
+        # Render mode
+        with_plane_depth = cfg.depth_point_loss or cfg.depth_image_loss or cfg.depth_normal_lambda > 0.0
+        self.render_mode = "RGB+PD" if with_plane_depth else "RGB"
+
     def freeze_gaussians(self):
         """Freeze all Gaussian parameters for controller distillation.
 
@@ -647,36 +655,37 @@ class Runner:
             )
             pixel_coords = torch.stack([pixel_x, pixel_y], dim=-1)  # [H, W, 2]
 
-            # Split RGB from extra channels (e.g. depth) for post-processing
-            rgb = render_colors[..., :3]
-            extra = render_colors[..., 3:] if render_colors.shape[-1] > 3 else None
+            if "RGB" in kwargs["render_mode"]:
+                # Split RGB from extra channels (e.g. depth) for post-processing
+                rgb = render_colors[..., :3]
+                extra = render_colors[..., 3:] if render_colors.shape[-1] > 3 else None
 
-            if self.cfg.post_processing == "bilateral_grid":
-                if frame_idcs is not None:
-                    grid_xy = (
-                        pixel_coords / torch.tensor([width, height], device=self.device)
-                    ).unsqueeze(0)
-                    rgb = slice(
-                        self.post_processing_module,
-                        grid_xy.expand(rgb.shape[0], -1, -1, -1),
-                        rgb,
-                        frame_idcs.unsqueeze(-1),
-                    )["rgb"]
-            elif self.cfg.post_processing == "ppisp":
-                camera_idx = camera_idcs.item() if camera_idcs is not None else None
-                frame_idx = frame_idcs.item() if frame_idcs is not None else None
-                rgb = self.post_processing_module(
-                    rgb=rgb,
-                    pixel_coords=pixel_coords,
-                    resolution=(width, height),
-                    camera_idx=camera_idx,
-                    frame_idx=frame_idx,
-                    exposure_prior=exposure,
+                if self.cfg.post_processing == "bilateral_grid":
+                    if frame_idcs is not None:
+                        grid_xy = (
+                            pixel_coords / torch.tensor([width, height], device=self.device)
+                        ).unsqueeze(0)
+                        rgb = slice(
+                            self.post_processing_module,
+                            grid_xy.expand(rgb.shape[0], -1, -1, -1),
+                            rgb,
+                            frame_idcs.unsqueeze(-1),
+                        )["rgb"]
+                elif self.cfg.post_processing == "ppisp":
+                    camera_idx = camera_idcs.item() if camera_idcs is not None else None
+                    frame_idx = frame_idcs.item() if frame_idcs is not None else None
+                    rgb = self.post_processing_module(
+                        rgb=rgb,
+                        pixel_coords=pixel_coords,
+                        resolution=(width, height),
+                        camera_idx=camera_idx,
+                        frame_idx=frame_idx,
+                        exposure_prior=exposure,
+                    )
+
+                render_colors = (
+                    torch.cat([rgb, extra], dim=-1) if extra is not None else rgb
                 )
-
-            render_colors = (
-                torch.cat([rgb, extra], dim=-1) if extra is not None else rgb
-            )
 
         return render_colors, render_alphas, info
 
@@ -806,7 +815,7 @@ class Runner:
                 near_plane=cfg.near_plane,
                 far_plane=cfg.far_plane,
                 image_ids=image_ids,
-                render_mode="RGB+PD" if cfg.depth_point_loss or cfg.depth_image_loss else "RGB",
+                render_mode=self.render_mode,
                 masks=masks,
                 frame_idcs=image_ids,
                 camera_idcs=data["camera_idx"].to(device),
@@ -835,7 +844,8 @@ class Runner:
                 colors.permute(0, 3, 1, 2), pixels.permute(0, 3, 1, 2), padding="valid"
             )
             loss = l1loss * (1.0 - cfg.ssim_lambda) + ssimloss * cfg.ssim_lambda
-            
+
+            # Supervise sampled depths from rendered depths with prior depth points
             if cfg.depth_point_loss:
                 # Prepare depth pixels for grid sampling into rendered depth map
                 depth_pixels = torch.stack(
@@ -855,13 +865,61 @@ class Runner:
                 scale = 1.0 if cfg.metric_scale else self.scene_scale
                 depth_loss = F.l1_loss(disp, disp_gt) * scale
                 loss += depth_loss * cfg.depth_lambda
-            
-            if cfg.depth_image_loss:
+
+            # Supervise rendered depths with prior depth images
+            if cfg.depth_image_loss and step >= cfg.depth_image_loss_from:
                 depth_valid_mask = (depth_image > 0) & (depth_image < cfg.depth_image_max_distance) & (depths > 0)
                 if depth_valid_mask.any():
                     scale = 1.0 if cfg.metric_scale else self.scene_scale
                     depth_loss = F.l1_loss(depths[depth_valid_mask], depth_image[depth_valid_mask]) * scale
                     loss += depth_loss * cfg.depth_lambda
+
+            # Depth-normal consistency
+            if cfg.depth_normal_lambda > 0.0 and "P" in self.render_mode and step >= cfg.depth_normal_loss_from:
+                def _get_img_grad_weight(gt_image):
+                    # gt_image: [..., H, W, 3]
+                    *batch_dims, H, W, C = gt_image.shape
+                    assert C == 3
+
+                    # Move channels to NCHW
+                    gt_img = gt_image.permute(*range(len(batch_dims)), -1, -3, -2)  # [..., 3, H, W]
+
+                    # Gradients
+                    bottom = gt_img[..., :, 2:H,   1:W-1]
+                    top    = gt_img[..., :, 0:H-2, 1:W-1]
+                    right  = gt_img[..., :, 1:H-1, 2:W]
+                    left   = gt_img[..., :, 1:H-1, 0:W-2]
+
+                    grad_x = torch.mean(torch.abs(right - left), dim=-3, keepdim=True)  # avg over channel
+                    grad_y = torch.mean(torch.abs(top - bottom), dim=-3, keepdim=True)
+
+                    grad = torch.cat((grad_x, grad_y), dim=-3)  # [..., 2, H-2, W-2]
+                    grad, _ = torch.max(grad, dim=-3)           # [..., H-2, W-2]
+
+                    grad_flat = grad.view(*batch_dims, -1)
+                    gmin = grad_flat.min(dim=-1, keepdim=True).values
+                    gmax = grad_flat.max(dim=-1, keepdim=True).values
+                    grad = (grad - gmin[..., None]) / (gmax[..., None] - gmin[..., None] + 1e-6)
+
+                    # Pad back to H, W and add channel dim
+                    grad = torch.nn.functional.pad(grad, (1, 1, 1, 1))  # [..., H, W]
+                    grad = grad.unsqueeze(-1)  # [..., H, W, 1]
+                
+                    return grad
+
+                weights = (1.0 - _get_img_grad_weight(pixels)).clamp(0, 1).detach() ** 2  # [..., H, W, 1]
+                weights = weights.unsqueeze(-4)            # [..., 1, H, W, 1]
+                render_normals = info["render_normals_c"]  # [..., C, H, W, 3]
+                depth_normals  = info["depth_normals"]     # [..., C, H, W, 3]
+
+                # Valid mask (non-zero normals)
+                render_valid = render_normals.norm(dim=-1, keepdim=True) > 1e-6
+                depth_valid  = depth_normals.norm(dim=-1, keepdim=True) > 1e-6
+                valid_mask = (render_valid & depth_valid).float()
+                weights = weights * valid_mask
+
+                diff = (render_normals - depth_normals).abs().sum(dim=-1, keepdim=True)  # [..., C, H, W, 1]
+                loss += cfg.depth_normal_lambda * ((weights * diff).sum() / (weights.sum() + 1e-6))
             
             if cfg.post_processing == "bilateral_grid":
                 post_processing_reg_loss = 10 * total_variation_loss(
@@ -879,6 +937,17 @@ class Runner:
                 loss += cfg.opacity_reg * torch.sigmoid(self.splats["opacities"]).mean()
             if cfg.scale_reg > 0.0:
                 loss += cfg.scale_reg * torch.exp(self.splats["scales"]).mean()
+            if cfg.planar_reg > 0.0:
+                radii = info["radii"]                    # [..., C, N, 2]
+                valid_per_cam = (radii > 0).any(dim=-1)  # [..., C, N]
+                visibility_filter = valid_per_cam.any(dim=-2)  # [..., N]
+                if visibility_filter.sum() > 0:
+                    scales = torch.exp(self.splats["scales"])  # [N, 3]
+                    scales = scales[visibility_filter]
+
+                    sorted_scale, _ = torch.sort(scales, dim=-1)
+                    min_scale_loss = sorted_scale[..., 0]
+                    loss += cfg.planar_reg * min_scale_loss.mean()
 
             loss.backward()
 
@@ -887,7 +956,7 @@ class Runner:
                 postfix_dict = { "SH": f"{sh_degree_to_use}", "Loss": f"{loss.item():.5f}" }
                 n_points = len(self.splats["means"])
                 postfix_dict["Points"] = f"{n_points}"
-                if cfg.depth_point_loss or cfg.depth_image_loss:
+                if cfg.depth_point_loss or (cfg.depth_image_loss and step >= cfg.depth_image_loss_from):
                     postfix_dict["Depth"] = f"{depth_loss.item():.5f}"
                 if cfg.pose_opt and cfg.pose_noise:
                     pose_err = F.l1_loss(camtoworlds_gt, camtoworlds)
@@ -902,7 +971,7 @@ class Runner:
                 self.writer.add_scalar("train/ssimloss", ssimloss.item(), step)
                 self.writer.add_scalar("train/num_GS", len(self.splats["means"]), step)
                 self.writer.add_scalar("train/mem", mem, step)
-                if cfg.depth_point_loss or cfg.depth_image_loss:
+                if cfg.depth_point_loss or (cfg.depth_image_loss and step >= cfg.depth_image_loss_from):
                     self.writer.add_scalar("train/depthloss", depth_loss.item(), step)
                 if cfg.post_processing is not None:
                     self.writer.add_scalar(
@@ -910,10 +979,6 @@ class Runner:
                         post_processing_reg_loss.item(),
                         step,
                     )
-                # if cfg.tb_save_image:
-                #     canvas = torch.cat([pixels, colors], dim=2).detach().cpu().numpy()
-                #     canvas = canvas.reshape(-1, *canvas.shape[2:])
-                #     self.writer.add_image("train/render", canvas, step)
                 self.writer.flush()
 
             # save checkpoint before updating the model
@@ -1096,7 +1161,7 @@ class Runner:
 
             torch.cuda.synchronize()
             tic = time.time()
-            colors, _, _ = self.rasterize_splats(
+            renders, alphas, meta = self.rasterize_splats(
                 camtoworlds=camtoworlds,
                 Ks=Ks,
                 width=width,
@@ -1108,11 +1173,12 @@ class Runner:
                 frame_idcs=None,  # For novel views, pass None (no per-frame parameters available)
                 camera_idcs=data["camera_idx"].to(device),
                 exposure=exposure,
-            )  # [1, H, W, 3]
+                render_mode=self.render_mode,
+            )  # [1, H, W, ...], [1, H, W, 1]
             torch.cuda.synchronize()
             ellapsed_time += max(time.time() - tic, 1e-10)
 
-            colors = torch.clamp(colors, 0.0, 1.0)
+            colors = torch.clamp(renders[..., :3], 0.0, 1.0)  # [1, H, W, 3]
 
             if world_rank == 0:
                 # Compute NVS metrics
@@ -1137,10 +1203,41 @@ class Runner:
                     continue
                 stem = self.parser.image_names[self.valset.indices[data["image_id"]]].rsplit(".", 1)[0]
                 gt_image = torch.clamp(pixels, 0.0, 1.0).permute(0, 3, 1, 2) # [1, 3, H, W]
-                rgb_render = colors.permute(0, 3, 1, 2) # [1, 3, H, W]
+                color_render = colors.permute(0, 3, 1, 2)  # [1, 3, H, W]
+                alpha_render = alphas.permute(0, 3, 1, 2)  # [1, 1, H, W]
 
-                self.writer.add_images(f"{stage}_{stem}/ground_truth", gt_image, global_step=step + 1)
-                self.writer.add_images(f"{stage}_{stem}/rgb_render", rgb_render, global_step=step + 1)
+                self.writer.add_images(f"{stage}_{stem}/gt_rgb", gt_image, global_step=step + 1)
+                self.writer.add_images(f"{stage}_{stem}/color", color_render, global_step=step + 1)
+                self.writer.add_images(f"{stage}_{stem}/alpha", alpha_render, global_step=step + 1)
+
+                def rescale_depth(depth_map):
+                    d = depth_map.view(-1)
+                    near = torch.quantile(d, 0.02)
+                    far  = torch.quantile(d, 0.98)
+                    scaled_depths = (depth_map - near) / (far - near + 1e-6)
+                    scaled_depths = torch.clamp(scaled_depths, 0.0, 1.0)
+                    return scaled_depths
+
+                if "D" in self.render_mode:
+                    depths = renders[..., 3:4]
+                    depths = rescale_depth(depths)             # [1, H, W, 1]
+                    depth_render = depths.permute(0, 3, 1, 2)  # [1, 1, H, W]
+                    self.writer.add_images(f"{stage}_{stem}/depth", depth_render, global_step=step + 1)
+
+                if cfg.depth_image_loss:
+                    depth_image = rescale_depth(data["depth_image"])  # [1, H, W, 1]
+                    depth_image = depth_image.permute(0, 3, 1, 2)     # [1, 1, H, W]
+                    self.writer.add_images(f"{stage}_{stem}/gt_depth", depth_image, global_step=step + 1)
+
+                if "P" in self.render_mode:
+                    render_normals = meta["render_normals_c"]  # [1, H, W, 3]
+                    depth_normals  = meta["depth_normals"]  # [1, H, W, 3]
+                    
+                    normal_render = fix_normal_coordinates(render_normals).permute(0, 3, 1, 2)  # [1, 3, H, W]
+                    depth_normal  = fix_normal_coordinates(depth_normals).permute(0, 3, 1, 2)   # [1, 3, H, W]
+
+                    self.writer.add_images(f"{stage}_{stem}/normal_render", normal_render, global_step=step + 1)
+                    self.writer.add_images(f"{stage}_{stem}/normal_depth", depth_normal, global_step=step + 1)
 
         if world_rank == 0:
             ellapsed_time /= len(valloader)
@@ -1225,7 +1322,7 @@ class Runner:
             camtoworlds = camtoworlds_all[i : i + 1]
             Ks = K[None]
 
-            renders, _, _ = self.rasterize_splats(
+            renders, alphas, meta = self.rasterize_splats(
                 camtoworlds=camtoworlds,
                 Ks=Ks,
                 width=width,
@@ -1233,15 +1330,23 @@ class Runner:
                 sh_degree=cfg.sh_degree,
                 near_plane=cfg.near_plane,
                 far_plane=cfg.far_plane,
-                render_mode="RGB+ED",
+                render_mode="RGB+PD",
             )  # [1, H, W, 4]
             colors = torch.clamp(renders[..., 0:3], 0.0, 1.0)  # [1, H, W, 3]
+            
+            cutoff = self.scene_scale * 1.5
             depths = renders[..., 3:4]  # [1, H, W, 1]
-            depths = (depths - depths.min()) / (depths.max() - depths.min())
-            canvas_list = [colors, depths.repeat(1, 1, 1, 3)]
+            depths = (depths - cfg.near_plane) / (cutoff - cfg.near_plane)
+            depths = torch.clamp(depths, 0.0, 1.0)
 
-            # write images
-            canvas = torch.cat(canvas_list, dim=2).squeeze(0).cpu().numpy()
+            colored_alphas = apply_float_colormap(alphas.squeeze(0), "gray").unsqueeze(0)   # [1, H, W, 3]
+            colored_depths = apply_float_colormap(depths.squeeze(0), "magma").unsqueeze(0)  # [1, H, W, 3]
+            adated_normals = fix_normal_coordinates(meta["depth_normals"])                  # [1, H, W, 3]
+
+            # Buid canvas
+            canvas_1st_row = torch.cat([colors, colored_alphas], dim=2)
+            canvas_2nd_row = torch.cat([colored_depths, adated_normals], dim=2)
+            canvas = torch.cat([canvas_1st_row, canvas_2nd_row], dim=1).squeeze(0).cpu().numpy()
             canvas = (canvas * 255).astype(np.uint8)
 
             # pad the frame to standard resolutions

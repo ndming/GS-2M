@@ -144,7 +144,7 @@ class Parser:
         colmap_image_dir = os.path.join(data_dir, "images")
         if not os.path.exists(colmap_image_dir):
             raise ValueError(f"COLMAP image dir {colmap_image_dir} does not exist!")
-        processed_image_dir = Path(colmap_image_dir).parent / "processed_images"
+        processed_image_dir = Path(colmap_image_dir).parent / f"processed_images_{factor}"
         image_paths = process_input_images(
             colmap_image_dir, str(processed_image_dir), image_names, factor, reuse=reuse_processed_images,
             mask_image=mask_gt_image)

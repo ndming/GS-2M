@@ -222,3 +222,17 @@ def apply_depth_colormap(
     if acc is not None:
         img = img * acc + (1.0 - acc)
     return img
+
+def fix_normal_coordinates(normal_map):
+    # Flatten and normalize normals
+    normals = normal_map.view(-1, 3).clone()  # [H * W, 3]
+    normals = F.normalize(normals, dim=1, p=2)
+
+    # Apply Y-up/Z-back coordinate fix
+    T = torch.tensor([[1, 0, 0], [0, -1, 0], [0, 0, -1]], dtype=normals.dtype, device=normals.device)
+    normals = normals @ T.T
+
+    # Adjust range
+    normals = normals * 0.5 + 0.5 # [-1, 1] -> [0, 1]
+    H, W = normal_map.shape[1:3]
+    return normals.view(1, H, W, 3)
