@@ -32,7 +32,6 @@ imageio[ffmpeg]
 viser
 splines
 submodules/nerfview
-submodules/ppisp
 
 # Compression (for cupy-cuda, see: https://docs.cupy.dev/en/stable/install.html#installing-cupy)
 cupy-cuda12x

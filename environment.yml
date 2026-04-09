@@ -1,37 +1,22 @@
 name: gs2m
 channels:
-  - pytorch
-  - nvidia/label/cuda-12.4.1
+  - nvidia/label/cuda-12.8.1
   - conda-forge
   - defaults
 dependencies:
-  - cuda-toolkit=12.4
-  - einops
-  - huggingface_hub
-  - imageio
-  - kornia
+  - cuda-toolkit=12.8
   - matplotlib
   - numpy=1.26.4
-  - opencv
-  - plyfile
   - python=3.10
   - pip=22.1
-  - piexif
-  - pytorch=2.4.1
-  - pytorch-cuda=12.4
-  - scikit-image
+  - pytorch-gpu=2.9.1
+  - pybind11
   - scikit-learn
+  - scikit-image
   - setuptools=68
-  - splines
   - tensorboard
-  - timm
-  - torchaudio=2.4.1
-  - torchvision=0.19.1
-  - torchmetrics
-  - tqdm
-  - trimesh
-  - tyro>=0.8.8
-  - viser
+  - torchaudio=2.9.1
+  - torchvision=0.24.1
   - pip:
     - submodules/pycolmap
     - submodules/gsplat
@@ -40,11 +25,25 @@ dependencies:
     - submodules/fused-ssim
     - submodules/fused-bilagrid
     - submodules/nerfview
-    - submodules/ppisp
     - submodules/plas
     - cupy-cuda12x
+    - einops
+    - huggingface_hub
+    - imageio[ffmpeg]
+    - kornia
     - msgpack
-    - open3d==0.18.0
+    - numpy<2.0.0
     - nvidia-ncore
+    - open3d==0.18.0
+    - opencv-python
+    - piexif
+    - plyfile
+    - splines
+    - timm
+    - torchmetrics[image]
     - torchpq
+    - tqdm
+    - trimesh
+    - tyro>=0.8.8
+    - viser
     - usd-core

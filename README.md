@@ -1,5 +1,14 @@
 # GS-2M: Material-aware Gaussian Splatting for High-fidelity Mesh Reconstruction
-[arXiv](https://arxiv.org/abs/2509.22276) | [Project Page](https://ndming.github.io/publications/gs2m)
+
+<p align="center">
+  <a href="https://arxiv.org/abs/2509.22276">
+    <img src="https://img.shields.io/badge/arXiv-2509.22276-b31b1b.svg">
+  </a>
+  <a href="https://ndming.github.io/publications/gs2m">
+    <img src="https://img.shields.io/badge/Project-Page-blue.svg">
+  </a>
+</p>
+
 ![cover](media/cover.png)
 
 ## Installation
@@ -7,7 +16,7 @@
 > As part of the migration to [gsplat](https://docs.gsplat.studio/main/), we recommend using CUDA `12.4` as the minimum.
 
 Please make sure you have a working C++ compiler compatible with your preferred CUDA Toolkit version. This usually means using
-the default GCC version on Linux or installing the correct version of Visual Studio [BuildTools](https://learn.microsoft.com/en-us/visualstudio/releases/2022/release-history) on Windows.
+the default GCC on Linux or installing the correct version of Visual Studio [BuildTools](https://learn.microsoft.com/en-us/visualstudio/releases/2022/release-history) on Windows.
 
 <details>
 <summary><span style="font-weight: bold;">Compatibility matrix between MSVC and CUDA for Windows installation</span></summary>
@@ -36,9 +45,8 @@ From here, you can proceed with the installation either by:
 - Installing with `conda`/`mamba` if you want the CUDA Toolkit to be self-contained in the Conda environment
 
 ### Installing to a Python virtual environment
-This installation path is recommended if CUDA Toolkit is already available system-wide, or when your GPU driver is not
-compatible with CUDA less than `12.8` (common for Blackwell generations). Additionally, you will have the freedom to
-choose the PyTorch version suitable with your installed CUDA Toolkit.
+This installation path allows you to use your pre-installed CUDA Toolkit with `nvcc` available system-wide.
+Additionally, you will have the freedom to choose the PyTorch version suitable to your installed CUDA Toolkit.
 
 Create a local [venv](https://docs.python.org/3/library/venv.html) with `pip<=25.2`:
 ```bash
@@ -63,17 +71,24 @@ pip install torch==2.7.1 torchvision==0.22.1 torchaudio==2.7.1 --index-url https
 
 Install the remaining packages
 ```bash
-pip install -r requirements.txt --no-build-isolation # see requirements.txt for more details
+pip install -r requirements.txt
+pip install submodules/ppisp --no-build-isolation
 ```
 
 ### Installing with `conda`/`mamba`
-This installation path doesn't require a pre-installed CUDA Toolkit, nor 
+This installation path does not require a pre-installed CUDA Toolkit, as CUDA will be installed automatically inside
+the Conda environment. By default, the CUDA Toolkit and PyTorch version are pinned to `12.8` and `2.9.1`, respectively.
+```bash
+conda env create --file environment.yml
+conda activate gs2m
+pip install submodules/ppisp --no-build-isolation
+``` 
 
 ## Usage
 As with other Gaussian splatting pipelines, reconstructing a scene from multi-view images involves three key steps:
 - Structure from Motion (SfM)
 - Training Gaussians
-- Mesh extraction: this is specific to surface reconstruction tasks, including GS-2M
+- Mesh extraction: this is specific to surface reconstruction pipelines, including GS-2M
 
 ### Structure from Motion
 SfM prepares training data from unposed images, for which [COLMAP](https://github.com/colmap/colmap) is the recommended choice.
@@ -82,10 +97,8 @@ While you can follow the instructions from the original [3DGS](https://github.co
 to run COLMAP for your scene, we prepared an automatic COLMAP run script for convenience. It is based on the original `convert.py` script of 3DGS, modified to account for the new features of COLMAP `4.0` such as global mapping (GLOMAP) or neural feature
 extraction and matching from [ALIKED](https://github.com/Shiaoming/ALIKED) and [LightGlue](https://github.com/cvg/lightglue).
 
-First, please follow COLMAP's [offical installation guide](https://colmap.github.io/install.html) to install the base
-COLMAP binary with version `4.0` as the minimum.
-
-Once done, organize your images with the following structure:
+First, please follow COLMAP's [offical installation guide](https://colmap.github.io/install.html) to install the base 
+`colmap` binary with version `4.0` as the minimum. Once done, organize your images with the following structure:
 ```
 scene/
 └── input/
@@ -99,12 +112,13 @@ Run the following command to begin the SfM process (make sure the installed `gs2
 python scripts/colmap.py --source_path <path/to/scene>
 ```
 
-Useful optional parameters for `scripts/colmap.py`:
+Useful optional parameters come with `scripts/colmap.py`:
 - `--sample_from`: prepare a fresh `input` directory under `scene` by sampling frames under a directory or from a video
-whose path is specified with this parameter
+whose path is specified with this parameter (default to empty, where images under `scene/input` will be used as is)
 - `--sample_interval`: sample frames every this interval, only applies if `--sample_from` is not empty
-- `--colmap_feature_extraction`: one of `SIFT`, `ALIKED_N16ROT`, or `ALIKED_N32`; default to `SIFT`
-- `--colmap_feature_matching`: one of `SIFT_BRUTEFORCE`, `SIFT_LIGHTGLUE`, `ALIKED_BRUTEFORCE`, or `ALIKED_LIGHTGLUE`; default to `SIFT_BRUTEFORCE`
+- `--colmap_feature_extraction`: one of `SIFT`, `ALIKED_N16ROT`, or `ALIKED_N32` (default to `SIFT`)
+- `--colmap_feature_matching`: one of `SIFT_BRUTEFORCE`, `SIFT_LIGHTGLUE`, `ALIKED_BRUTEFORCE`, or `ALIKED_LIGHTGLUE` 
+(default to `SIFT_BRUTEFORCE`)
 
 A COLMAP-prepared training directory for GS-2M may look like the following. Note that `masks` is completely optional.
 If you have foreground masks of the target object, organize them as shown below. 
@@ -142,7 +156,7 @@ git clone https://github.com/ZhengPeng7/BiRefNet.git scripts/birefnet
 # Once you have obtained undistorted RGB images from COLMAP, run the following script (with gs2m activated)
 # - if -o is omitted, the output dir is created at the same level as the input image dir
 # - if -w is omitted, the model will fetch weights from HuggingFace
-# On Linux:
+# On Linux (bash):
 PYTHONPATH=scripts/birefnet python scripts/masking.py -i </path/to/scene>/images [-o /path/to/output -w /path/to/weight]
 # On Windows (PowerShell)
 $env:PYTHONPATH="scripts\birefnet"; python scripts/masking.py -i </path/to/scene>/images [-o /path/to/output -w /path/to/weight]
