@@ -6,13 +6,13 @@
 > [!IMPORTANT]  
 > As part of the migration to [gsplat](https://docs.gsplat.studio/main/), we recommend using CUDA `12.4` as the minimum.
 
-Please make sure you have a working C++ compiler compatible with your preferred CUDA version. This usually means using
+Please make sure you have a working C++ compiler compatible with your preferred CUDA Toolkit version. This usually means using
 the default GCC version on Linux or installing the correct version of Visual Studio [BuildTools](https://learn.microsoft.com/en-us/visualstudio/releases/2022/release-history) on Windows.
 
 <details>
 <summary><span style="font-weight: bold;">Compatibility matrix between MSVC and CUDA for Windows installation</span></summary>
 
-| **MSVC** | **CUDA** |
+| **MSVC** | **CUDA Toolkit** |
 |----------|----------|
 | `19.44` (VS `17.14`) | Minimum `12.4` |
 | `19.43` (VS `17.13`) | Minimum `12.4` |
@@ -25,29 +25,30 @@ the default GCC version on Linux or installing the correct version of Visual Stu
 </details>
 
 
-Clone the repo and submodules:
+First, clone the repo and submodules:
 ```bash
 git clone https://github.com/ndming/GS-2M.git --recursive
 cd GS-2M
 ```
 
+From here, you can proceed with the installation either by:
+- Installing to a Python virtual environment if CUDA Toolkit is pre-installed to your system, or
+- Installing with `conda`/`mamba` if you want the CUDA Toolkit to be self-contained in the Conda environment
+
 ### Installing to a Python virtual environment
-This installation path is recommended if your installed CUDA is already available system-wide, or when your GPU driver
-is not compatible with CUDA less than `12.8` (common for Blackwell generations). Additionally, you will have the freedom
-to choose the PyTorch version suitable with your CUDA.
+This installation path is recommended if CUDA Toolkit is already available system-wide, or when your GPU driver is not
+compatible with CUDA less than `12.8` (common for Blackwell generations). Additionally, you will have the freedom to
+choose the PyTorch version suitable with your installed CUDA Toolkit.
 
 Create a local [venv](https://docs.python.org/3/library/venv.html) with `pip<=25.2`:
 ```bash
 python -m venv .venvs/gs2m
 
-# Activate on Linux
+# Activate the venv on Linux
 source .venvs/gs2m/bin/activate
 
-# Activate on Windows
+# Activate the venv on Windows
 .\.venvs\gs2m\Scripts\Activate.ps1
-
-# Ensure setuptools and wheel compatible with submodules
-pip install -U setuptools==68 wheel
 ```
 
 Pin to `numpy<2.0.0` before installing PyTorch:
@@ -64,6 +65,9 @@ Install the remaining packages
 ```bash
 pip install -r requirements.txt --no-build-isolation # see requirements.txt for more details
 ```
+
+### Installing with `conda`/`mamba`
+This installation path doesn't require a pre-installed CUDA Toolkit, nor 
 
 ## Usage
 As with other Gaussian splatting pipelines, reconstructing a scene from multi-view images involves three key steps:

@@ -1,35 +1,50 @@
 name: gs2m
 channels:
   - pytorch
-  - nvidia/label/cuda-11.8.0
+  - nvidia/label/cuda-12.4.1
   - conda-forge
   - defaults
 dependencies:
-  - cuda-toolkit=11.8
-  - mkl=2024.0.0
-  - numpy=1.23.5
+  - cuda-toolkit=12.4
+  - einops
+  - huggingface_hub
+  - imageio
+  - kornia
+  - matplotlib
+  - numpy=1.26.4
+  - opencv
   - plyfile
-  - python=3.9
-  - pip=22.3.1
-  - pytorch=2.0.1
-  - pytorch-cuda=11.8
-  - torchaudio=2.0.2
-  - torchvision=0.15.2
+  - python=3.10
+  - pip=22.1
+  - piexif
+  - pytorch=2.4.1
+  - pytorch-cuda=12.4
+  - scikit-image
+  - scikit-learn
+  - setuptools=68
+  - splines
+  - tensorboard
+  - timm
+  - torchaudio=2.4.1
+  - torchvision=0.19.1
+  - torchmetrics
   - tqdm
+  - trimesh
+  - tyro>=0.8.8
+  - viser
   - pip:
-      - submodules/diff-gaussian-rasterization
-      - submodules/nvdiffrast
-      - submodules/render-utils
-      - submodules/simple-knn
-      - submodules/fused-ssim
-      - open3d==0.18.0
-      - opencv-python
-      - matplotlib
-      - scikit-image    # for DTU evaluation
-      - scikit-learn    # for DTU evaluation
-      - trimesh         # for DTU evaluation
-      - tensorboard     # optional
-      - einops          # for masking with BiRefNet
-      - kornia          # for masking with BiRefNet
-      - timm            # for masking with BiRefNet
-      - huggingface_hub # for masking with BiRefNet
+    - submodules/pycolmap
+    - submodules/gsplat
+    - submodules/nvdiffrast
+    - submodules/render-utils
+    - submodules/fused-ssim
+    - submodules/fused-bilagrid
+    - submodules/nerfview
+    - submodules/ppisp
+    - submodules/plas
+    - cupy-cuda12x
+    - msgpack
+    - open3d==0.18.0
+    - nvidia-ncore
+    - torchpq
+    - usd-core

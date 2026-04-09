@@ -1,17 +1,19 @@
 # GS-2M main dependencies
-plyfile
-tqdm
-open3d==0.18.0
-opencv-python
 matplotlib
 numpy<2.0.0
+open3d==0.18.0
+opencv-python
 piexif
+plyfile
 scikit-image
 scikit-learn
+setuptools==68
+tqdm
 trimesh
 tyro>=0.8.8
 tensorboard
 torchmetrics[image]
+wheel
 submodules/pycolmap
 submodules/gsplat
 submodules/nvdiffrast
