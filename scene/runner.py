@@ -485,15 +485,17 @@ class Runner:
 
         # Densification Strategy
         self.cfg.strategy.check_sanity(self.splats, self.optimizers)
-
+        self.cfg.strategy.refine_stop_iter += self.ckpt_step + 1
         if isinstance(self.cfg.strategy, DefaultStrategy):
             self.strategy_state = self.cfg.strategy.initialize_state(
                 scene_scale=self.scene_scale
             )
+            self.cfg.strategy.refine_scale2d_stop_iter += self.ckpt_step + 1
         elif isinstance(self.cfg.strategy, MCMCStrategy):
             self.strategy_state = self.cfg.strategy.initialize_state()
         else:
             assert_never(self.cfg.strategy)
+        
 
         # Compression Strategy
         self.compression_method = None
