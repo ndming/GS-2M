@@ -280,13 +280,11 @@ all the great research and publicly available code that made this possible.
 
 ## BibTeX
 ```
-@misc{nguyen2025gs2m,
-      title={GS-2M: Gaussian Splatting for Joint Mesh Reconstruction and Material Decomposition},
-      author={Dinh Minh Nguyen and Malte Avenhaus and Thomas Lindemeier},
-      year={2025},
-      eprint={2509.22276},
-      archivePrefix={arXiv},
-      primaryClass={cs.CV},
-      url={https://arxiv.org/abs/2509.22276},
+@article{nguyen2026gs2m,
+    title   = {GS-2M: Material-aware Gaussian Splatting for High-fidelity Mesh Reconstruction},
+    author  = {Nguyen, Dinh Minh and Avenhaus, Malte and Lindemeier, Thomas},
+    journal = {Computer Graphics Forum},
+    year    = {2026},
+    doi     = {10.1111/cgf.70347}
 }
 ```
