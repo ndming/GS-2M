@@ -44,8 +44,10 @@ from .utils import AppearanceOptModule, CameraOptModule, knn, rgb_to_sh, set_ran
 class Config:
     # Disable viewer
     disable_viewer: bool = False
-    # Path to the .pt files. If provide, it will skip training and run evaluation only.
+    # Path to checkpoint .pt files to continue training or run evaluation, depending on the --eval_ckpt option
     ckpt: Optional[List[str]] = None
+    # If not set, pick up training from where --ckpt left off, otherwise run evaluation, applies if --ckpt is set
+    eval_ckpt: bool = False
     # Name of compression strategy to use
     compression: Optional[Literal["png"]] = None
     # Render trajectory path
@@ -75,6 +77,10 @@ class Config:
     mask_gt_image: bool = False
     # If set, don't perfrom pre-processing of GT RGB images and use the existing ones
     reuse_processed_images: bool = False
+    # How many frames at the start to skip when loading certain datasets
+    num_offset_frames: int = 0
+    # Load frames at this interval for certain datasets
+    num_stride_frames: int = 1
 
     # Port for the viewer server
     port: int = 8080
@@ -181,7 +187,7 @@ class Config:
     ppisp_use_controller: bool = True
     # Use controller distillation in PPISP (only applies when post_processing="ppisp" and ppisp_use_controller=True)
     ppisp_controller_distillation: bool = True
-    # Controller activation ratio for PPISP (only applies when post_processing="ppisp" and ppisp_use_controller=True)
+    # Activate PPISP controller after we have made this many steps (only applies when post_processing="ppisp" and ppisp_use_controller=True)
     ppisp_controller_activation_num_steps: int = 25_000
     # Color correction method for cc_* metrics (only applies when post_processing is set)
     color_correct_method: Literal["affine", "quadratic"] = "affine"
@@ -193,7 +199,7 @@ class Config:
     # Enable depth loss between rendered depths and GT depth images (experimental)
     depth_image_loss: bool = False
     # Start applying depth image loss from this step (only applies when depth_image_loss=True)
-    depth_image_loss_from: int = 7000
+    depth_image_loss_from_step: int = 5000
     # The distance beyond which GT depth values are considered invalid
     depth_image_max_distance: float = 10.0
     # Weight for depth loss
@@ -208,7 +214,7 @@ class Config:
     # Enforce depth normal consistency, 0 to disable
     depth_normal_lambda: float = 0.0
     # Start applying depth normal consistency loss from this step (only applies when depth_normal_lambda > 0)
-    depth_normal_loss_from: int = 7000
+    depth_normal_loss_from_step: int = 7000
 
     # Dump information to tensorboard every this steps
     tb_every: int = 100
@@ -268,50 +274,69 @@ def create_splats_with_optimizers(
     device: str = "cuda",
     world_rank: int = 0,
     world_size: int = 1,
+    ckpt_splats: Optional[Dict[str, Tensor]] = None,
 ) -> Tuple[torch.nn.ParameterDict, Dict[str, torch.optim.Optimizer]]:
-    if init_type == "sfm":
-        points = torch.from_numpy(parser.points).float()
-        rgbs = torch.from_numpy(parser.points_rgb / 255.0).float()
-    elif init_type == "random":
-        points = init_extent * scene_scale * (torch.rand((init_num_pts, 3)) * 2 - 1)
-        rgbs = torch.rand((init_num_pts, 3))
+    if ckpt_splats is not None:
+        # LR map mirrors the params list below — means gets scene_scale factor,
+        # sh0/features/colors share sh0_lr, everything else is direct.
+        lr_map = {
+            "means":      means_lr * scene_scale,
+            "scales":     scales_lr,
+            "quats":      quats_lr,
+            "opacities":  opacities_lr,
+            "sh0":        sh0_lr,
+            "shN":        shN_lr,
+            "features":   sh0_lr,
+            "colors":     sh0_lr,
+        }
+        params = [
+            (name, torch.nn.Parameter(tensor[world_rank::world_size]), lr_map[name])
+            for name, tensor in ckpt_splats.items()
+        ]
     else:
-        raise ValueError("Please specify a correct init_type: sfm or random")
+        if init_type == "sfm":
+            points = torch.from_numpy(parser.points).float()
+            rgbs = torch.from_numpy(parser.points_rgb / 255.0).float()
+        elif init_type == "random":
+            points = init_extent * scene_scale * (torch.rand((init_num_pts, 3)) * 2 - 1)
+            rgbs = torch.rand((init_num_pts, 3))
+        else:
+            raise ValueError("Please specify a correct init_type: sfm or random")
 
-    # Initialize the GS size to be the average dist of the 3 nearest neighbors
-    dist2_avg = (knn(points, 4)[:, 1:] ** 2).mean(dim=-1)  # [N,]
-    dist_avg = torch.sqrt(dist2_avg)
-    scales = torch.log(dist_avg * init_scale).unsqueeze(-1).repeat(1, 3)  # [N, 3]
+        # Initialize the GS size to be the average dist of the 3 nearest neighbors
+        dist2_avg = (knn(points, 4)[:, 1:] ** 2).mean(dim=-1)  # [N,]
+        dist_avg = torch.sqrt(dist2_avg)
+        scales = torch.log(dist_avg * init_scale).unsqueeze(-1).repeat(1, 3)  # [N, 3]
 
-    # Distribute the GSs to different ranks (also works for single rank)
-    points = points[world_rank::world_size]
-    rgbs = rgbs[world_rank::world_size]
-    scales = scales[world_rank::world_size]
+        # Distribute the GSs to different ranks (also works for single rank)
+        points = points[world_rank::world_size]
+        rgbs = rgbs[world_rank::world_size]
+        scales = scales[world_rank::world_size]
 
-    N = points.shape[0]
-    quats = torch.rand((N, 4))  # [N, 4]
-    opacities = torch.logit(torch.full((N,), init_opacity))  # [N,]
+        N = points.shape[0]
+        quats = torch.rand((N, 4))  # [N, 4]
+        opacities = torch.logit(torch.full((N,), init_opacity))  # [N,]
 
-    params = [
-        # name, value, lr
-        ("means", torch.nn.Parameter(points), means_lr * scene_scale),
-        ("scales", torch.nn.Parameter(scales), scales_lr),
-        ("quats", torch.nn.Parameter(quats), quats_lr),
-        ("opacities", torch.nn.Parameter(opacities), opacities_lr),
-    ]
+        params = [
+            # name, value, lr
+            ("means", torch.nn.Parameter(points), means_lr * scene_scale),
+            ("scales", torch.nn.Parameter(scales), scales_lr),
+            ("quats", torch.nn.Parameter(quats), quats_lr),
+            ("opacities", torch.nn.Parameter(opacities), opacities_lr),
+        ]
 
-    if feature_dim is None:
-        # color is SH coefficients.
-        colors = torch.zeros((N, (sh_degree + 1) ** 2, 3))  # [N, K, 3]
-        colors[:, 0, :] = rgb_to_sh(rgbs)
-        params.append(("sh0", torch.nn.Parameter(colors[:, :1, :]), sh0_lr))
-        params.append(("shN", torch.nn.Parameter(colors[:, 1:, :]), shN_lr))
-    else:
-        # features will be used for appearance and view-dependent shading
-        features = torch.rand(N, feature_dim)  # [N, feature_dim]
-        params.append(("features", torch.nn.Parameter(features), sh0_lr))
-        colors = torch.logit(rgbs)  # [N, 3]
-        params.append(("colors", torch.nn.Parameter(colors), sh0_lr))
+        if feature_dim is None:
+            # color is SH coefficients.
+            colors = torch.zeros((N, (sh_degree + 1) ** 2, 3))  # [N, K, 3]
+            colors[:, 0, :] = rgb_to_sh(rgbs)
+            params.append(("sh0", torch.nn.Parameter(colors[:, :1, :]), sh0_lr))
+            params.append(("shN", torch.nn.Parameter(colors[:, 1:, :]), shN_lr))
+        else:
+            # features will be used for appearance and view-dependent shading
+            features = torch.rand(N, feature_dim)  # [N, feature_dim]
+            params.append(("features", torch.nn.Parameter(features), sh0_lr))
+            colors = torch.logit(rgbs)  # [N, 3]
+            params.append(("colors", torch.nn.Parameter(colors), sh0_lr))
 
     splats = torch.nn.ParameterDict({n: v for n, v, _ in params}).to(device)
     # Scale learning rate based on batch size, reference:
@@ -366,8 +391,9 @@ class Runner:
 
         # Tensorboard
         self.writer = SummaryWriter(log_dir=f"{cfg.result_dir}/tb")
-        for file in Path(f"{cfg.result_dir}/tb").glob("events.out.tfevents.*"):
-            file.unlink()
+        if cfg.ckpt is None:  # only wipe on a clean run:
+            for file in Path(f"{cfg.result_dir}/tb").glob("events.out.tfevents.*"):
+                file.unlink()
 
         # Load data: Training data should contain initial points and colors.
         self.parser = get_parser(cfg.data_dir)(
@@ -378,6 +404,8 @@ class Runner:
             load_exposure=cfg.load_exposure,
             mask_gt_image=cfg.mask_gt_image,
             reuse_processed_images=cfg.reuse_processed_images,
+            num_offset_frames=cfg.num_offset_frames,
+            num_stride_frames=cfg.num_stride_frames,
         )
         self.trainset = Dataset(
             self.parser,
@@ -408,6 +436,24 @@ class Runner:
             raise ValueError(
                 f"PPISP post-processing requires MCMCStrategy at the moment."
             )
+        
+        # Load checkpoint splats, if any
+        ckpt_splats = None
+        ckpt_post_processing_state = None
+        self.ckpt_step = -1
+        if cfg.ckpt is not None:
+            ckpts = [
+                torch.load(file, map_location=self.device, weights_only=True)
+                for file in cfg.ckpt
+            ]
+            # Reconstruct full (unsharded) tensors from per-rank checkpoints
+            ckpt_splats = {
+                k: torch.cat([ckpt["splats"][k] for ckpt in ckpts])
+                for k in ckpts[0]["splats"].keys()  # use rank-0 to get keys
+            }
+            self.ckpt_step = ckpts[0]["step"]
+            ckpt_post_processing_state = ckpts[0].get("post_processing")
+            print(f"[>] Loaded model from step {self.ckpt_step}")
 
         # Model
         feature_dim = 32 if cfg.app_opt else None
@@ -433,6 +479,7 @@ class Runner:
             device=self.device,
             world_rank=world_rank,
             world_size=world_size,
+            ckpt_splats=ckpt_splats,
         )
         print("[>] Model initialized. Number of GS:", len(self.splats["means"]))
 
@@ -532,6 +579,51 @@ class Runner:
             self.post_processing_optimizers = (
                 self.post_processing_module.create_optimizers()
             )
+
+        # Load post-processing state if present in checkpoint
+        if self.post_processing_module is not None and ckpt_post_processing_state is not None:
+            if cfg.post_processing == "ppisp":
+                module = self.post_processing_module
+                ckpt_num_frames = ckpt_post_processing_state["exposure_params"].shape[0]
+
+                if ckpt_num_frames == module.num_frames:
+                    # Shapes match (maybe we're resuming training on the same dataset)
+                    module.load_state_dict(ckpt_post_processing_state)
+                    print("[>] Loaded PPISP state from checkpoint, assuming the same training set!")
+                else:
+                    # Per-frame shape mismatch (e.g. fine-tuning on a different dataset):
+                    # load per-camera params directly and initialize per-frame params from
+                    # checkpoint mean so PPISP starts from the average learned correction
+                    module.vignetting_params.data.copy_(ckpt_post_processing_state["vignetting_params"])
+                    module.crf_params.data.copy_(ckpt_post_processing_state["crf_params"])
+        
+                    # Per-frame params: initialize from checkpoint mean rather than zero,
+                    # so PPISP starts from the average correction seen during pre-training
+                    module.exposure_params.data.fill_(
+                        ckpt_post_processing_state["exposure_params"].mean().item()
+                    )
+                    module.color_params.data.copy_(
+                        ckpt_post_processing_state["color_params"].mean(dim=0, keepdim=True)
+                        .expand_as(module.color_params)
+                    )
+        
+                    # Controller weights: load directly (shape doesn't depend on num_frames)
+                    if cfg.ppisp_use_controller and len(module.controllers) > 0:
+                        controller_keys = {
+                            k: v for k, v in ckpt_post_processing_state.items()
+                            if k.startswith("controllers.")
+                        }
+                        module.load_state_dict(controller_keys, strict=False)
+
+                    print(
+                        f"[>] Loaded PPISP per-camera state from checkpoint "
+                        f"(frame count changed {ckpt_num_frames} -> {module.num_frames}, "
+                        f"per-frame params initialized from checkpoint mean)"
+                    )
+            else:
+                # Bilateral grid or other: shape matches, load directly
+                self.post_processing_module.load_state_dict(ckpt_post_processing_state)
+                print("[>] Loaded post-processing state from checkpoint")
 
         # Losses & Metrics.
         self.ssim = StructuralSimilarityIndexMeasure(data_range=1.0).to(self.device)
@@ -701,7 +793,8 @@ class Runner:
                 yaml.dump(vars(cfg), f)
 
         max_steps = cfg.max_steps
-        init_step = 0
+        init_step = self.ckpt_step + 1
+        last_step = self.ckpt_step + cfg.max_steps
 
         schedulers = [
             # means has a learning rate schedule, that end at 0.01 of the initial value
@@ -753,7 +846,7 @@ class Runner:
 
         # Training loop.
         global_tic = time.time()
-        pbar = tqdm(range(init_step, max_steps), ncols=128, desc="[>] Training")
+        pbar = tqdm(range(init_step, last_step + 1), ncols=128, desc="[>] Training")
         for step in pbar:
             if not cfg.disable_viewer:
                 while self.viewer.state == "paused":
@@ -766,7 +859,7 @@ class Runner:
                 cfg.post_processing == "ppisp"
                 and cfg.ppisp_use_controller
                 and cfg.ppisp_controller_distillation
-                and step >= cfg.ppisp_controller_activation_num_steps
+                and step >= cfg.ppisp_controller_activation_num_steps + self.ckpt_step + 1
             ):
                 self.freeze_gaussians()
 
@@ -982,7 +1075,7 @@ class Runner:
                 self.writer.flush()
 
             # save checkpoint before updating the model
-            if step in [i - 1 for i in cfg.save_steps] or step == max_steps - 1:
+            if step in [i + self.ckpt_step for i in cfg.save_steps] or step == last_step:
                 mem = torch.cuda.max_memory_allocated() / 1024**3
                 stats = {
                     "mem": mem,
@@ -990,7 +1083,7 @@ class Runner:
                     "num_GS": len(self.splats["means"]),
                 }
                 elapsed_minutes = stats["ellapsed_time"] / 60
-                tqdm.write(f"[>] Iter {(step + 1):>5} | Memory: {mem:.2f}GB | Ellapsed time: {elapsed_minutes:.2f}mins")
+                tqdm.write(f"[>] After {(step + 1):>5} steps: mem = {mem:.2f}GB, elapsed time = {elapsed_minutes:.2f}mins")
                 with open(
                     f"{self.stats_dir}/train_step{step:04d}_rank{self.world_rank}.json",
                     "w",
@@ -1010,10 +1103,10 @@ class Runner:
                 if self.post_processing_module is not None:
                     data["post_processing"] = self.post_processing_module.state_dict()
                 torch.save(
-                    data, f"{self.ckpt_dir}/ckpt_{step}_rank{self.world_rank}.pt"
+                    data, f"{self.ckpt_dir}/ckpt_step{step}_rank{self.world_rank}.pt"
                 )
             if (
-                step in [i - 1 for i in cfg.ply_steps] or step == max_steps - 1
+                step in [i + self.ckpt_step for i in cfg.ply_steps] or step == last_step
             ) and cfg.save_ply:
 
                 if self.cfg.app_opt:
@@ -1114,12 +1207,12 @@ class Runner:
                 assert_never(self.cfg.strategy)
 
             # eval the full set
-            if step in [i - 1 for i in cfg.eval_steps]:
+            if step in [i + self.ckpt_step for i in cfg.eval_steps]:
                 self.eval(step, stage="train" if cfg.test_every <= 0 else "val")
                 self.render_traj(step)
 
             # run compression
-            if cfg.compression is not None and step in [i - 1 for i in cfg.eval_steps]:
+            if cfg.compression is not None and step in [i + self.ckpt_step for i in cfg.eval_steps]:
                 self.run_compression(step=step)
 
             if not cfg.disable_viewer:
@@ -1341,7 +1434,7 @@ class Runner:
 
             colored_alphas = apply_float_colormap(alphas.squeeze(0), "gray").unsqueeze(0)   # [1, H, W, 3]
             colored_depths = apply_float_colormap(depths.squeeze(0), "magma").unsqueeze(0)  # [1, H, W, 3]
-            adated_normals = fix_normal_coordinates(meta["depth_normals"])                  # [1, H, W, 3]
+            adated_normals = fix_normal_coordinates(meta["render_normals_c"])               # [1, H, W, 3]
 
             # Buid canvas
             canvas_1st_row = torch.cat([colors, colored_alphas], dim=2)
@@ -1443,8 +1536,7 @@ class Runner:
             far_plane=render_tab_state.far_plane,
             radius_clip=render_tab_state.radius_clip,
             eps2d=render_tab_state.eps2d,
-            backgrounds=torch.tensor([render_tab_state.backgrounds], device=self.device)
-            / 255.0,
+            backgrounds=torch.tensor([render_tab_state.backgrounds], device=self.device) / 255.0,
             render_mode=RENDER_MODE_MAP[render_tab_state.render_mode],
             rasterize_mode=render_tab_state.rasterize_mode,
             camera_model=render_tab_state.camera_model,
@@ -1502,23 +1594,11 @@ def main(local_rank: int, world_rank, world_size: int, cfg: Config):
 
     runner = Runner(local_rank, world_rank, world_size, cfg)
 
-    if cfg.ckpt is not None:
-        # run eval only
-        ckpts = [
-            torch.load(file, map_location=runner.device, weights_only=True)
-            for file in cfg.ckpt
-        ]
-        for k in runner.splats.keys():
-            runner.splats[k].data = torch.cat([ckpt["splats"][k] for ckpt in ckpts])
-        if runner.post_processing_module is not None:
-            pp_state = ckpts[0].get("post_processing")
-            if pp_state is not None:
-                runner.post_processing_module.load_state_dict(pp_state)
-        step = ckpts[0]["step"]
-        runner.eval(step=step)
-        runner.render_traj(step=step)
+    if cfg.ckpt is not None and cfg.eval_ckpt:
+        runner.eval(step=runner.ckpt_step)
+        runner.render_traj(step=runner.ckpt_step)
         if cfg.compression is not None:
-            runner.run_compression(step=step)
+            runner.run_compression(step=runner.ckpt_step)
     else:
         runner.train()
         runner.export_ppisp_reports()

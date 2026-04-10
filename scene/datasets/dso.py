@@ -143,7 +143,6 @@ def _read_points(pcd_dir, image_names, kf_poses):
         pcd_file = pcd_dir / f"{stamp}.pcd"
 
         if not pcd_file.exists():
-            print(f"[!] Skipping PCD file {pcd_file}: file not found")
             point_indices[name] = np.empty((0,), dtype=np.int32)
             continue
 
@@ -241,6 +240,7 @@ class Parser:
         load_exposure: bool = False,
         mask_gt_image: bool = False,
         reuse_processed_images: bool = False,
+        **kwargs,
     ):
         self.data_dir = data_dir
         self.factor = factor
@@ -251,7 +251,10 @@ class Parser:
         pose_file = Path(data_dir) / "output" / "poses.txt"
         assert pose_file.exists(), f"{pose_file} not found"
 
-        kf_stamps, kf_poses = _read_keyframe_poses(pose_file, stride=4)
+        stride = kwargs.get("num_stride_frames", 1)
+        offset = kwargs.get("num_offset_frames", 0)
+        print(f"[>] DSO parsers: load frames from offset {offset} with stride {stride}")
+        kf_stamps, kf_poses = _read_keyframe_poses(pose_file, stride=stride, offset=offset)
         assert len(kf_stamps) == len(kf_poses)
 
         if len(kf_stamps) == 0:
@@ -265,7 +268,7 @@ class Parser:
         print(f"[>] Parser: {len(kf_stamps)} images, taken by {len(Ks_dict)} camera")
 
         dso_image_dir = Path(data_dir) / "dso" / "rgb"
-        dso_depth_dir = Path(data_dir) / "dso" / "depth"
+        dso_depth_dir = Path(data_dir) / "ffs"
         
         # These two arrays match 1-to-1 (image and pose)
         c2w_mats = np.stack(kf_poses, axis=0)
@@ -324,7 +327,7 @@ class Parser:
         self.transform = transform          # np.ndarray, (4, 4)
         # GT depth maps
         self.depth_paths = depth_paths
-        self.depth_scale = 1.0 / 5000.0
+        self.depth_scale = 1.0 / 1000.0
 
         # Create 0-based contiguous camera indices from camera_ids.
         # This is useful for camera-based embeddings/modules.

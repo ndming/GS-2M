@@ -1,11 +1,11 @@
 # GS-2M: Material-aware Gaussian Splatting for High-fidelity Mesh Reconstruction
 
 <p align="center">
-  <a href="https://arxiv.org/abs/2509.22276">
-    <img src="https://img.shields.io/badge/arXiv-2509.22276-b31b1b.svg">
+  <a href="https://arxiv.org/abs/2509.22276" target="_blank">
+    <img src="https://img.shields.io/badge/arXiv-2509.22276-b31b1b.svg?style=for-the-badge" alt="arXiv">
   </a>
-  <a href="https://ndming.github.io/publications/gs2m">
-    <img src="https://img.shields.io/badge/Project-Page-blue.svg">
+  <a href="https://ndming.github.io/publications/gs2m" target="_blank">
+    <img src="https://img.shields.io/badge/Project-Page-blue.svg?style=for-the-badge" alt="Project Page">
   </a>
 </p>
 
@@ -16,7 +16,7 @@
 > As part of the migration to [gsplat](https://docs.gsplat.studio/main/), we recommend using CUDA `12.4` as the minimum.
 
 Please make sure you have a working C++ compiler compatible with your preferred CUDA Toolkit version. This usually means using
-the default GCC on Linux or installing the correct version of Visual Studio [BuildTools](https://learn.microsoft.com/en-us/visualstudio/releases/2022/release-history) on Windows.
+the default GCC on Linux or installing the correct version of [Visual Studio](https://learn.microsoft.com/en-us/visualstudio/releases/2022/release-history) on Windows.
 
 <details>
 <summary><span style="font-weight: bold;">Compatibility matrix between MSVC and CUDA for Windows installation</span></summary>
@@ -42,7 +42,7 @@ cd GS-2M
 
 From here, you can proceed with the installation either by:
 - Installing to a Python virtual environment if CUDA Toolkit is pre-installed to your system, or
-- Installing with `conda`/`mamba` if you want the CUDA Toolkit to be self-contained in the Conda environment
+- Installing with `conda`/`mamba` if you're on Linux and want the CUDA Toolkit to be self-contained
 
 ### Installing to a Python virtual environment
 This installation path allows you to use your pre-installed CUDA Toolkit with `nvcc` available system-wide.
@@ -69,13 +69,13 @@ Install a version of [PyTorch and TorchVision](https://pytorch.org/get-started/p
 pip install torch==2.7.1 torchvision==0.22.1 torchaudio==2.7.1 --index-url https://download.pytorch.org/whl/cu128
 ```
 
-Install the remaining packages
+Install the remaining packages:
 ```bash
 pip install -r requirements.txt
 pip install submodules/ppisp --no-build-isolation
 ```
 
-### Installing with `conda`/`mamba`
+### Installing with `conda`/`mamba` (Linux only)
 This installation path does not require a pre-installed CUDA Toolkit, as CUDA will be installed automatically inside
 the Conda environment. By default, the CUDA Toolkit and PyTorch version are pinned to `12.8` and `2.9.1`, respectively.
 ```bash
@@ -102,12 +102,12 @@ First, please follow COLMAP's [offical installation guide](https://colmap.github
 ```
 scene/
 └── input/
-    ├── 001.jpg
-    ├── 002.jpg
+    ├── 001.png
+    ├── 002.png
     └── ...
 ```
 
-Run the following command to begin the SfM process (make sure the installed `gs2m` environment is activated)
+Run the following command to begin the SfM process (make sure the installed `gs2m` environment is activated):
 ```bash
 python scripts/colmap.py --source_path <path/to/scene>
 ```
@@ -211,7 +211,7 @@ improve robustness to noise but blur fine details.
 
 </details>
 
-### Export Gaussian scene as USDZ
+### Export trained Gaussians and the extracted mesh to a USDZ scene
 ```bash
 python scripts/export/usd.py -i <path/to>/point_cloud_30000.ply -m <path/to>/mesh.ply [-o <path/to>/scene.usdz --collision --invisible]
 ```
@@ -351,13 +351,11 @@ all the great research and publicly available code that made this possible.
 
 ## BibTeX
 ```
-@misc{nguyen2025gs2m,
-      title={GS-2M: Gaussian Splatting for Joint Mesh Reconstruction and Material Decomposition},
-      author={Dinh Minh Nguyen and Malte Avenhaus and Thomas Lindemeier},
-      year={2025},
-      eprint={2509.22276},
-      archivePrefix={arXiv},
-      primaryClass={cs.CV},
-      url={https://arxiv.org/abs/2509.22276},
+@article{nguyen2026gs2m,
+    title   = {GS-2M: Material-aware Gaussian Splatting for High-fidelity Mesh Reconstruction},
+    author  = {Nguyen, Dinh Minh and Avenhaus, Malte and Lindemeier, Thomas},
+    journal = {Computer Graphics Forum},
+    year    = {2026},
+    doi     = {10.1111/cgf.70347}
 }
 ```

@@ -27,6 +27,7 @@ class Parser:
         load_exposure: bool = False,
         mask_gt_image: bool = False,
         reuse_processed_images: bool = False,
+        **kwargs,
     ):
         self.data_dir = data_dir
         self.factor = factor

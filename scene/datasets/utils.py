@@ -53,10 +53,12 @@ def process_input_images(image_dir, target_dir, image_names, factor, reuse=False
 
         width, height = image.size
         resolution = (width // factor, height // factor)
-        image = image.resize(resolution)
+        if factor > 1:
+            image = image.resize(resolution)
 
         if alpha is not None:
-            alpha = alpha.resize(resolution, Image.Resampling.NEAREST)
+            if factor > 1:
+                alpha = alpha.resize(resolution, Image.Resampling.NEAREST)
         else:
             alpha = Image.new("L", resolution, 255)
 
@@ -96,7 +98,8 @@ def process_input_depths(depth_dir, target_dir, image_names, factor, reuse=False
 
         width, height = depth.size
         resolution = (width // factor, height // factor)
-        depth = depth.resize(resolution, Image.Resampling.NEAREST)
+        if factor > 1:
+            depth = depth.resize(resolution, Image.Resampling.NEAREST)
 
         depth.save(str(output_file))
         depth_paths.append(str(output_file.resolve()))
