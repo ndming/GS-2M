@@ -1,12 +1,7 @@
 # GS-2M: Material-aware Gaussian Splatting for High-fidelity Mesh Reconstruction
 
-<p align="center">
-  <a href="https://arxiv.org/abs/2509.22276" target="_blank">
-    <img src="https://img.shields.io/badge/arXiv-2509.22276-b31b1b.svg?style=for-the-badge" alt="arXiv">
-  </a>
-  <a href="https://ndming.github.io/publications/gs2m" target="_blank">
-    <img src="https://img.shields.io/badge/Project-Page-blue.svg?style=for-the-badge" alt="Project Page">
-  </a>
+<p>
+  <a href="https://arxiv.org/abs/2509.22276" target="_blank"><img src="https://img.shields.io/badge/arXiv-2509.22276-b31b1b.svg?style=for-the-badge" alt="arXiv"></a> <a href="https://ndming.github.io/publications/gs2m" target="_blank"><img src="https://img.shields.io/badge/Project-Page-blue.svg?style=for-the-badge" alt="Project Page"></a> <a href="https://onlinelibrary.wiley.com/doi/10.1111/cgf.70347" target="_blank"><img src="https://img.shields.io/badge/CGF-Paper-F5E642?style=for-the-badge" alt="CGF Paper"></a>
 </p>
 
 ![cover](media/cover.png)
@@ -112,13 +107,17 @@ Run the following command to begin the SfM process (make sure the installed `gs2
 python scripts/colmap.py --source_path <path/to/scene>
 ```
 
-Useful optional parameters come with `scripts/colmap.py`:
-- `--sample_from`: prepare a fresh `input` directory under `scene` by sampling frames under a directory or from a video
-whose path is specified with this parameter (default to empty, where images under `scene/input` will be used as is)
-- `--sample_interval`: sample frames every this interval, only applies if `--sample_from` is not empty
-- `--colmap_feature_extraction`: one of `SIFT`, `ALIKED_N16ROT`, or `ALIKED_N32` (default to `SIFT`)
-- `--colmap_feature_matching`: one of `SIFT_BRUTEFORCE`, `SIFT_LIGHTGLUE`, `ALIKED_BRUTEFORCE`, or `ALIKED_LIGHTGLUE` 
+<details>
+<summary><span style="font-weight: bold;">Options to sample from videos or enable advanced COLMAP features</span></summary>
+
+- `sample_from`: path to a video or directory used to generate input frames. When provided, frames are sampled (for videos)
+or copied (for directories) and written to a fresh `input` directory under `scene` (or overwrite the existing ones if `sample_overwrite` is given). If not set (default), the script uses the existing contents of `scene/input` without modification
+- `sample_interval`: sample frames every this interval, only applies if `sample_from` is not empty
+- `colmap_feature_extraction`: one of `SIFT`, `ALIKED_N16ROT`, or `ALIKED_N32` (default to `SIFT`)
+- `colmap_feature_matching`: one of `SIFT_BRUTEFORCE`, `SIFT_LIGHTGLUE`, `ALIKED_BRUTEFORCE`, or `ALIKED_LIGHTGLUE` 
 (default to `SIFT_BRUTEFORCE`)
+
+</details>
 
 A COLMAP-prepared training directory for GS-2M may look like the following. Note that `masks` is completely optional.
 If you have foreground masks of the target object, organize them as shown below. 
@@ -352,10 +351,14 @@ all the great research and publicly available code that made this possible.
 ## BibTeX
 ```
 @article{nguyen2026gs2m,
-    title   = {GS-2M: Material-aware Gaussian Splatting for High-fidelity Mesh Reconstruction},
-    author  = {Nguyen, Dinh Minh and Avenhaus, Malte and Lindemeier, Thomas},
-    journal = {Computer Graphics Forum},
-    year    = {2026},
-    doi     = {10.1111/cgf.70347}
+   title={GS‐2M: Material‐aware Gaussian Splatting for High‐fidelity Mesh Reconstruction},
+   ISSN={1467-8659},
+   url={http://dx.doi.org/10.1111/cgf.70347},
+   DOI={10.1111/cgf.70347},
+   journal={Computer Graphics Forum},
+   publisher={Wiley},
+   author={Nguyen, D. M. and Avenhaus, M. and Lindemeier, T.},
+   year={2026},
+   month=apr
 }
 ```

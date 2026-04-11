@@ -161,6 +161,7 @@ if __name__ == "__main__":
     parser = ArgumentParser("COLMAP 4.0 converter")
     parser.add_argument("--sample_from", default="", type=str)
     parser.add_argument("--sample_interval", default=1, type=int)
+    parser.add_argument("--sample_overwrite", action='store_true')
     parser.add_argument("--skip_matching", action='store_true')
     parser.add_argument("--source_path", "-s", required=True, type=str)
     parser.add_argument("--camera", default="OPENCV", type=str)
@@ -186,6 +187,9 @@ if __name__ == "__main__":
         os.makedirs(source_dir, exist_ok=True)
 
         input_dir = source_dir / "input"
+        if input_dir.exists() and any(input_dir.iterdir()) and not args.sample_overwrite:
+            print(f"Warning: found assets under {input_dir}, please remove them or run with --sample_overwrite, exiting...")
+            exit(1)
         os.makedirs(input_dir, exist_ok=True)
         for file in input_dir.iterdir():
             file.unlink()
