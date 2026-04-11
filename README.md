@@ -1,5 +1,14 @@
 # GS-2M: Material-aware Gaussian Splatting for High-fidelity Mesh Reconstruction
-[arXiv](https://arxiv.org/abs/2509.22276) (updating) | [Project Page](https://ndming.github.io/publications/gs2m)
+
+<p align="center>
+  <a href="https://arxiv.org/abs/2509.22276" target="_blank">
+    <img src="https://img.shields.io/badge/arXiv-2509.22276-b31b1b.svg?style=for-the-badge" alt="arXiv">
+  </a>
+  <a href="https://ndming.github.io/publications/gs2m" target="_blank">
+    <img src="https://img.shields.io/badge/Project-Page-blue.svg?style=for-the-badge" alt="Project Page">
+  </a>
+</p>
+
 ![cover](media/cover.png)
 
 ## Installation
@@ -281,10 +290,14 @@ all the great research and publicly available code that made this possible.
 ## BibTeX
 ```
 @article{nguyen2026gs2m,
-    title   = {GS-2M: Material-aware Gaussian Splatting for High-fidelity Mesh Reconstruction},
-    author  = {Nguyen, Dinh Minh and Avenhaus, Malte and Lindemeier, Thomas},
-    journal = {Computer Graphics Forum},
-    year    = {2026},
-    doi     = {10.1111/cgf.70347}
+   title={GS‐2M: Material‐aware Gaussian Splatting for High‐fidelity Mesh Reconstruction},
+   ISSN={1467-8659},
+   url={http://dx.doi.org/10.1111/cgf.70347},
+   DOI={10.1111/cgf.70347},
+   journal={Computer Graphics Forum},
+   publisher={Wiley},
+   author={Nguyen, D. M. and Avenhaus, M. and Lindemeier, T.},
+   year={2026},
+   month=apr
 }
 ```
