@@ -111,7 +111,7 @@ python scripts/colmap.py --source_path <path/to/scene>
 <summary><span style="font-weight: bold;">Options to sample from videos or enable advanced COLMAP features</span></summary>
 
 - `sample_from`: path to a video or directory used to generate input frames. When provided, frames are sampled (for videos)
-or copied (for directories) and written to a fresh `input` directory under `scene` (or overwrite the existing ones if `sample_overwrite` is given). If not set (default), the script uses the existing contents of `scene/input` without modification
+or copied (for directories) and written to a fresh `input` directory created under `scene` (or overwrite the existing ones if `sample_overwrite` is given). If not set (default), the script uses the existing contents of `input` without modification
 - `sample_interval`: sample frames every this interval, only applies if `sample_from` is not empty
 - `colmap_feature_extraction`: one of `SIFT`, `ALIKED_N16ROT`, or `ALIKED_N32` (default to `SIFT`)
 - `colmap_feature_matching`: one of `SIFT_BRUTEFORCE`, `SIFT_LIGHTGLUE`, `ALIKED_BRUTEFORCE`, or `ALIKED_LIGHTGLUE` 
@@ -144,22 +144,25 @@ scene/
 
 To reconstruct geometrically corrected objects from scenes with overwhelimg background, consider following these steps
 to extract foreground masks of the target object. We will be using the amazing model [BiRefNet](https://github.com/ZhengPeng7/BiRefNet?tab=readme-ov-file) from [this paper](https://arxiv.org/pdf/2401.03407).
+
+Clone the BiRefNet repo to the `scripts` directory (the location is crucial):
 ```bash
-# Clone the BiRefNet repo to scripts directory
 git clone https://github.com/ZhengPeng7/BiRefNet.git scripts/birefnet
+```
 
-# Optional: download checkpoint to use locally if your network cannot access HuggingFace
-# Link: https://drive.google.com/drive/folders/1s2Xe0cjq-2ctnJBR24563yMSCOu4CcxM
-# We recommend using the general checkpoint: BiRefNet_HR-general-epoch_130.pth
+Optional: download a [pre-trained model](https://drive.google.com/drive/folders/1s2Xe0cjq-2ctnJBR24563yMSCOu4CcxM) from
+the official repo to use locally if your network cannot access HuggingFace. We recommend using the general checkpoint: `BiRefNet_HR-general-epoch_130.pth`
 
-# Once you have obtained undistorted RGB images from COLMAP, run the following script (with gs2m activated)
-# - if -o is omitted, the output dir is created at the same level as the input image dir
-# - if -w is omitted, the model will fetch weights from HuggingFace
+Once you have obtained undistorted RGB images from SfM, run the following script (with gs2m activated):
+```bash
 # On Linux (bash):
 PYTHONPATH=scripts/birefnet python scripts/masking.py -i </path/to/scene>/images [-o /path/to/output -w /path/to/weight]
+
 # On Windows (PowerShell)
 $env:PYTHONPATH="scripts\birefnet"; python scripts/masking.py -i </path/to/scene>/images [-o /path/to/output -w /path/to/weight]
 ```
+- if `-w` is omitted, the model will fetch weights from HuggingFace
+- if `-o` is omitted, the output `masks` dir is created at the location of `images`, matching the file structure shown above
 
 </details>
 
