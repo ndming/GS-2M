@@ -1,12 +1,7 @@
 # GS-2M: Material-aware Gaussian Splatting for High-fidelity Mesh Reconstruction
 
-<p align="center>
-  <a href="https://arxiv.org/abs/2509.22276" target="_blank">
-    <img src="https://img.shields.io/badge/arXiv-2509.22276-b31b1b.svg?style=for-the-badge" alt="arXiv">
-  </a>
-  <a href="https://ndming.github.io/publications/gs2m" target="_blank">
-    <img src="https://img.shields.io/badge/Project-Page-blue.svg?style=for-the-badge" alt="Project Page">
-  </a>
+<p>
+  <a href="https://arxiv.org/abs/2509.22276" target="_blank"><img src="https://img.shields.io/badge/arXiv-2509.22276-b31b1b.svg?style=for-the-badge" alt="arXiv"></a> <a href="https://ndming.github.io/publications/gs2m" target="_blank"><img src="https://img.shields.io/badge/Project-Page-blue.svg?style=for-the-badge" alt="Project Page"></a> <a href="https://onlinelibrary.wiley.com/doi/10.1111/cgf.70347" target="_blank"><img src="https://img.shields.io/badge/CGF-Paper-F5E642?style=for-the-badge" alt="CGF Paper"></a>
 </p>
 
 ![cover](media/cover.png)
