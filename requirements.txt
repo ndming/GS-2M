@@ -7,13 +7,11 @@ piexif
 plyfile
 scikit-image
 scikit-learn
-setuptools==68
 tqdm
 trimesh
 tyro>=0.8.8
 tensorboard
 torchmetrics[image]
-wheel
 submodules/pycolmap
 submodules/gsplat
 submodules/nvdiffrast
@@ -36,14 +34,10 @@ submodules/nerfview
 # Compression (for cupy-cuda, see: https://docs.cupy.dev/en/stable/install.html#installing-cupy)
 cupy-cuda12x
 torchpq
+submodules/ppisp
 submodules/plas
 
 # Converting 3DGS scenes to USD
 msgpack
 nvidia-ncore
 usd-core
-
-# Visualization with Blender (may require pip<22.2)
-mathutils==3.3.0
---extra-index-url https://download.blender.org/pypi/
-bpy==4.0.0
