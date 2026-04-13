@@ -44,10 +44,8 @@ from .utils import AppearanceOptModule, CameraOptModule, knn, rgb_to_sh, set_ran
 class Config:
     # Disable viewer
     disable_viewer: bool = False
-    # Path to checkpoint .pt files to continue training or run evaluation, depending on the --eval_ckpt option
+    # Path to checkpoint .pt files to continue training from
     ckpt: Optional[List[str]] = None
-    # If not set, pick up training from where --ckpt left off, otherwise run evaluation, applies if --ckpt is set
-    eval_ckpt: bool = False
     # Name of compression strategy to use
     compression: Optional[Literal["png"]] = None
     # Render trajectory path
@@ -490,7 +488,6 @@ class Runner:
             self.strategy_state = self.cfg.strategy.initialize_state(
                 scene_scale=self.scene_scale
             )
-            self.cfg.strategy.refine_scale2d_stop_iter += self.ckpt_step + 1
         elif isinstance(self.cfg.strategy, MCMCStrategy):
             self.strategy_state = self.cfg.strategy.initialize_state()
         else:
@@ -962,7 +959,7 @@ class Runner:
                 loss += depth_loss * cfg.depth_lambda
 
             # Supervise rendered depths with prior depth images
-            if cfg.depth_image_loss and step >= cfg.depth_image_loss_from:
+            if cfg.depth_image_loss and step >= cfg.depth_image_loss_from_step:
                 depth_valid_mask = (depth_image > 0) & (depth_image < cfg.depth_image_max_distance) & (depths > 0)
                 if depth_valid_mask.any():
                     scale = 1.0 if cfg.metric_scale else self.scene_scale
@@ -970,7 +967,7 @@ class Runner:
                     loss += depth_loss * cfg.depth_lambda
 
             # Depth-normal consistency
-            if cfg.depth_normal_lambda > 0.0 and "P" in self.render_mode and step >= cfg.depth_normal_loss_from:
+            if cfg.depth_normal_lambda > 0.0 and "P" in self.render_mode and step >= cfg.depth_normal_loss_from_step:
                 def _get_img_grad_weight(gt_image):
                     # gt_image: [..., H, W, 3]
                     *batch_dims, H, W, C = gt_image.shape
@@ -1051,7 +1048,7 @@ class Runner:
                 postfix_dict = { "SH": f"{sh_degree_to_use}", "Loss": f"{loss.item():.5f}" }
                 n_points = len(self.splats["means"])
                 postfix_dict["Points"] = f"{n_points}"
-                if cfg.depth_point_loss or (cfg.depth_image_loss and step >= cfg.depth_image_loss_from):
+                if cfg.depth_point_loss or (cfg.depth_image_loss and step >= cfg.depth_image_loss_from_step):
                     postfix_dict["Depth"] = f"{depth_loss.item():.5f}"
                 if cfg.pose_opt and cfg.pose_noise:
                     pose_err = F.l1_loss(camtoworlds_gt, camtoworlds)
@@ -1066,7 +1063,7 @@ class Runner:
                 self.writer.add_scalar("train/ssimloss", ssimloss.item(), step)
                 self.writer.add_scalar("train/num_GS", len(self.splats["means"]), step)
                 self.writer.add_scalar("train/mem", mem, step)
-                if cfg.depth_point_loss or (cfg.depth_image_loss and step >= cfg.depth_image_loss_from):
+                if cfg.depth_point_loss or (cfg.depth_image_loss and step >= cfg.depth_image_loss_from_step):
                     self.writer.add_scalar("train/depthloss", depth_loss.item(), step)
                 if cfg.post_processing is not None:
                     self.writer.add_scalar(
@@ -1087,7 +1084,7 @@ class Runner:
                 elapsed_minutes = stats["ellapsed_time"] / 60
                 tqdm.write(f"[>] After {(step + 1):>5} steps: mem = {mem:.2f}GB, elapsed time = {elapsed_minutes:.2f}mins")
                 with open(
-                    f"{self.stats_dir}/train_step{step:04d}_rank{self.world_rank}.json",
+                    f"{self.stats_dir}/train_{step + 1}_rank{self.world_rank}.json",
                     "w",
                 ) as f:
                     json.dump(stats, f)
@@ -1105,7 +1102,7 @@ class Runner:
                 if self.post_processing_module is not None:
                     data["post_processing"] = self.post_processing_module.state_dict()
                 torch.save(
-                    data, f"{self.ckpt_dir}/ckpt_step{step}_rank{self.world_rank}.pt"
+                    data, f"{self.ckpt_dir}/step{step}_rank{self.world_rank}.pt"
                 )
             if (
                 step in [i + self.ckpt_step for i in cfg.ply_steps] or step == last_step
@@ -1215,7 +1212,7 @@ class Runner:
 
             # run compression
             if cfg.compression is not None and step in [i + self.ckpt_step for i in cfg.eval_steps]:
-                self.run_compression(step=step)
+                self.run_compression(step)
 
             if not cfg.disable_viewer:
                 self.viewer.lock.release()
@@ -1233,7 +1230,7 @@ class Runner:
     @torch.no_grad()
     def eval(self, step: int, stage: str = "val"):
         """Entry for evaluation."""
-        tqdm.write("--- Running evaluation...")
+        tqdm.write(f"--- Running evaluation ({stage})...")
         cfg = self.cfg
         device = self.device
         world_rank = self.world_rank
@@ -1358,7 +1355,7 @@ class Runner:
                     # f"Number of GS: {stats['num_GS']}"
                 )
             # save stats as json
-            with open(f"{self.stats_dir}/{stage}_step{step:04d}.json", "w") as f:
+            with open(f"{self.stats_dir}/{stage}_{step + 1}_metrics.json", "w") as f:
                 json.dump(stats, f)
             # save stats to tensorboard
             for k, v in stats.items():
@@ -1491,7 +1488,7 @@ class Runner:
     @torch.no_grad()
     def run_compression(self, step: int):
         """Entry for running compression."""
-        print("Running compression...")
+        print("--- Running compression...")
         world_rank = self.world_rank
 
         compress_dir = f"{self.cfg.result_dir}/compression/rank{world_rank}"
@@ -1594,16 +1591,10 @@ def main(local_rank: int, world_rank, world_size: int, cfg: Config):
         if world_rank == 0:
             print("Viewer is disabled in distributed training.")
 
+    # Init runner and start training
     runner = Runner(local_rank, world_rank, world_size, cfg)
-
-    if cfg.ckpt is not None and cfg.eval_ckpt:
-        runner.eval(step=runner.ckpt_step)
-        runner.render_traj(step=runner.ckpt_step)
-        if cfg.compression is not None:
-            runner.run_compression(step=runner.ckpt_step)
-    else:
-        runner.train()
-        runner.export_ppisp_reports()
+    runner.train()
+    runner.export_ppisp_reports()
 
     if not cfg.disable_viewer:
         runner.viewer.complete()
