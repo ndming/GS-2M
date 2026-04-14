@@ -1,6 +1,7 @@
 import json
 import math
 import os
+import sys
 import time
 
 from collections import defaultdict
@@ -10,13 +11,15 @@ from tqdm import tqdm
 from typing import Dict, List, Optional, Tuple, Union
 from typing_extensions import Literal, assert_never
 
+import imageio
 import viser
 import yaml
-import imageio
 
 import numpy as np
 import torch
 import torch.nn.functional as F
+
+import open3d as o3d
 
 from torch import Tensor
 from torch.nn.parallel import DistributedDataParallel as DDP
@@ -30,6 +33,7 @@ from gsplat.compression import PngCompression
 from gsplat.optimizers import SelectiveAdam
 from gsplat.rendering import rasterization
 from gsplat.strategy import DefaultStrategy, MCMCStrategy
+from gsplat.utils import depth_to_points
 
 from viewer import GsplatViewer, GsplatRenderTabState
 from nerfview import CameraState, RenderTabState, apply_float_colormap
@@ -545,6 +549,16 @@ class Runner:
             if world_size > 1:
                 self.app_module = DDP(self.app_module)
 
+        # Import post-processing modules based on configuration
+        # These imports must be here (not in __main__) for distributed workers
+        if cfg.post_processing == "bilateral_grid":
+            global BilateralGrid, slice, total_variation_loss
+            from fused_bilagrid import BilateralGrid, slice, total_variation_loss
+        elif cfg.post_processing == "ppisp":
+            global PPISP, PPISPConfig, export_ppisp_report
+            from ppisp import PPISP, PPISPConfig
+            from ppisp.report import export_ppisp_report
+
         self.post_processing_module = None
         if cfg.post_processing == "bilateral_grid":
             self.post_processing_module = BilateralGrid(
@@ -653,7 +667,7 @@ class Runner:
         # Track if Gaussians are frozen (for controller distillation)
         self._gaussians_frozen = False
 
-        # Render mode
+        # Everything related to depth rendering or supervision will use plane depth from now on
         with_plane_depth = cfg.depth_point_loss or cfg.depth_image_loss or cfg.depth_normal_lambda > 0.0
         self.render_mode = "RGB+PD" if with_plane_depth else "RGB"
 
@@ -666,7 +680,7 @@ class Runner:
         if self._gaussians_frozen:
             return
 
-        for name, param in self.splats.items():
+        for _, param in self.splats.items():
             param.requires_grad = False
 
         self._gaussians_frozen = True
@@ -1455,6 +1469,132 @@ class Runner:
         tqdm.write(f"--- Video saved to {video_dir}/traj_{step + 1}.mp4")
 
     @torch.no_grad()
+    def render_traj_with_mesh(self, mesh_file: Path, video_file: Path):
+        if sys.platform != "win32":
+            os.environ["PYOPENGL_PLATFORM"] = "egl"
+        import pyrender
+        import trimesh
+        assert mesh_file.exists(), mesh_file
+
+        cfg = self.cfg
+        device = self.device
+
+        # Trajectory
+        camtoworlds_all = self.parser.camtoworlds[5:-5]
+        if cfg.render_traj_path == "interp":
+            camtoworlds_all = generate_interpolated_path(
+                camtoworlds_all, n_interp=cfg.traj_num_interps
+            )  # [N, 3, 4]
+        elif cfg.render_traj_path == "ellipse":
+            height = camtoworlds_all[:, 2, 3].mean()
+            camtoworlds_all = generate_ellipse_path_z(
+                camtoworlds_all, height=height
+            )  # [N, 3, 4]
+        elif cfg.render_traj_path == "spiral":
+            camtoworlds_all = generate_spiral_path(
+                camtoworlds_all,
+                bounds=self.parser.bounds * self.scene_scale,
+                spiral_scale_r=self.parser.extconf["spiral_radius_scale"],
+            )
+        else:
+            assert_never(cfg.render_traj_path)
+
+        camtoworlds_all = np.concatenate(
+            [
+                camtoworlds_all,
+                np.repeat(
+                    np.array([[[0.0, 0.0, 0.0, 1.0]]]), len(camtoworlds_all), axis=0
+                ),
+            ],
+            axis=1,
+        )  # [N, 4, 4]
+        camtoworlds_all = torch.from_numpy(camtoworlds_all).float().to(device)
+        K = torch.from_numpy(list(self.parser.Ks_dict.values())[0]).float().to(device)
+        width, height = list(self.parser.imsize_dict.values())[0]
+
+        # Build pyrender scene one
+        tm = trimesh.load(str(mesh_file), force="mesh")
+        tm.visual = trimesh.visual.ColorVisuals()  # drops vertex colors, textures
+        py_mesh = pyrender.Mesh.from_trimesh(
+            tm,
+            smooth=False, # flat shading — every face normal is used as-is
+            material=pyrender.MetallicRoughnessMaterial(
+                baseColorFactor=[0.6, 0.6, 0.6, 1.0],  # neutral mid-gray
+                metallicFactor=0.0,                    # fully diffuse, zero metallic
+                roughnessFactor=1.0,                   # maximum roughness = lambertian
+            ),
+        )
+        K_np = K.cpu().numpy()  # [3, 3]
+        py_camera = pyrender.IntrinsicsCamera(
+            fx=K_np[0, 0], fy=K_np[1, 1],
+            cx=K_np[0, 2], cy=K_np[1, 2],
+            znear=cfg.near_plane, zfar=cfg.far_plane,
+        )
+        scene = pyrender.Scene(bg_color=[0., 0., 0., 0.], ambient_light=[0.15, 0.15, 0.15])
+        scene.add(py_mesh)
+        camera_node = scene.add(py_camera, pose=np.eye(4))
+        headlight = pyrender.DirectionalLight(color=np.ones(3), intensity=2.0)
+        scene.add(headlight, parent_node=camera_node)
+        renderer = pyrender.OffscreenRenderer(viewport_width=width, viewport_height=height)
+        FLIP_YZ = np.diag([1., -1., -1., 1.])
+
+        writer = imageio.get_writer(str(video_file), fps=30)
+        for i in tqdm(range(len(camtoworlds_all)), desc="[>] Rendering trajectory", ncols=128):
+            camtoworlds = camtoworlds_all[i : i + 1]
+            Ks = K[None]
+
+            # Render Gaussians
+            renders, _, meta = self.rasterize_splats(
+                camtoworlds=camtoworlds,
+                Ks=Ks,
+                width=width,
+                height=height,
+                sh_degree=cfg.sh_degree,
+                near_plane=cfg.near_plane,
+                far_plane=cfg.far_plane,
+                render_mode="RGB+PD",
+            )  # [1, H, W, 4]
+            colors = torch.clamp(renders[..., 0:3], 0.0, 1.0)  # [1, H, W, 3]
+            
+            cutoff = self.scene_scale * 1.5
+            depths = renders[..., 3:4]  # [1, H, W, 1]
+            depths = (depths - cfg.near_plane) / (cutoff - cfg.near_plane)
+            depths = torch.clamp(depths, 0.0, 1.0)
+
+            colored_depths = apply_float_colormap(depths.squeeze(0), "magma").unsqueeze(0)  # [1, H, W, 3]
+            adated_normals = fix_normal_coordinates(meta["render_normals_c"])               # [1, H, W, 3]
+
+            # Render mesh
+            c2w_np  = camtoworlds.squeeze(0).cpu().numpy()  # [4, 4]
+            c2w_gl  = c2w_np @ FLIP_YZ                      # [4, 4]
+            scene.set_pose(camera_node, pose=c2w_gl)
+            mesh_color_u8, _ = renderer.render(scene)                     # [H, W, 3] uint8
+            mesh_color_u8 = np.ascontiguousarray(mesh_color_u8.copy())    # make writable copy
+            mesh_color = torch.from_numpy(mesh_color_u8).float() / 255.0  # [H, W, 3]
+            mesh_color = mesh_color.unsqueeze(0).to(device)               # [1, H, W, 3]
+
+            # Buid canvas
+            canvas_1st_row = torch.cat([colors, mesh_color], dim=2)
+            canvas_2nd_row = torch.cat([colored_depths, adated_normals], dim=2)
+            canvas = torch.cat([canvas_1st_row, canvas_2nd_row], dim=1).squeeze(0).cpu().numpy()
+            canvas = (canvas * 255).astype(np.uint8)
+
+            # pad the frame to standard resolutions
+            FRAME_BLOCK_SIZE=16
+            h, w, _ = canvas.shape
+            pad_h = (FRAME_BLOCK_SIZE - h % FRAME_BLOCK_SIZE) % FRAME_BLOCK_SIZE
+            pad_w = (FRAME_BLOCK_SIZE - w % FRAME_BLOCK_SIZE) % FRAME_BLOCK_SIZE
+            if pad_h > 0 or pad_w > 0:
+                padding_value = 255 if cfg.white_bkgd else 0
+                canvas = np.pad(canvas, ((0, pad_h), (0, pad_w), (0, 0)), mode="constant", constant_values=padding_value)
+
+            writer.append_data(canvas)
+
+        renderer.delete()
+        writer.close()
+        print(f"[>] Video saved to: {video_file}")
+
+    @torch.no_grad()
     def export_ppisp_reports(self) -> None:
         """Export PPISP visualization reports (PDF) and parameter JSON."""
         if self.cfg.post_processing != "ppisp":
@@ -1484,6 +1624,107 @@ class Runner:
         print(f"PPISP reports saved to {output_dir}")
         for path in pdf_paths:
             print(f" - {path.name}")
+
+    @torch.no_grad()
+    def run_tsdf_fusion(self, max_depth, voxel_size, sdf_trunc, bounds=None):
+        assert self.world_size == 1, "TSDF fusion cannot be run in distributed mode"
+        render_mode = self.render_mode
+        if "D" not in render_mode:
+            print("[!] Warning: training did NOT consider depth, the quality of TSDF mesh could be awful")
+            render_mode = "RGB+PD"
+
+        device = self.device
+        loader = torch.utils.data.DataLoader(self.trainset, batch_size=1, shuffle=False, num_workers=1)
+        color_images = []
+        depth_images = []
+        c2w_mats = []
+        K_mats = []
+        for data in tqdm(loader, desc="[>] Rendering", ncols=128):
+            c2w = data["camtoworld"].to(device)  # [1, 4, 4]
+            K = data["K"].to(device)             # [1, 3, 3]
+            masks = data["mask"].to(device) if "mask" in data else None
+            
+            image = data["image"].to(device) / 255.0  # [1, H, W, 3]
+            alpha = data["alpha"].to(device) / 255.0  # [1, H, W, 1]
+            height, width = image.shape[1:3]
+
+            # Exposure metadata is available for any image with EXIF data (train or val)
+            exposure = data["exposure"].to(device) if "exposure" in data else None
+
+            renders, _, _ = self.rasterize_splats(
+                camtoworlds=c2w,
+                Ks=K,
+                width=width,
+                height=height,
+                sh_degree=self.cfg.sh_degree,
+                near_plane=self.cfg.near_plane,
+                far_plane=self.cfg.far_plane,
+                masks=masks,
+                frame_idcs=None,  # For novel views, pass None (no per-frame parameters available)
+                camera_idcs=data["camera_idx"].to(device),
+                exposure=exposure,
+                render_mode=render_mode,
+            )  # [1, H, W, ...]
+
+            colors = torch.clamp(renders[..., :3], 0.0, 1.0)  # [1, H, W, 3]
+            depths = renders[..., 3:4]                        # [1, H, W, 1]
+
+            if bounds is not None:
+                # bounds is a [3, 2] array where each row is the valid range
+                # in each dimension (e.g. row 0 is [-x, +x], and so on)
+                points = depth_to_points(depths, c2w, K, z_depth=True)  # [1, H, W, 3]
+                erase = (points[..., 0] < bounds[0, 0]) | (points[..., 0] > bounds[0, 1]) |\
+                        (points[..., 1] < bounds[1, 0]) | (points[..., 1] > bounds[1, 1]) |\
+                        (points[..., 2] < bounds[2, 0]) | (points[..., 2] > bounds[2, 1])
+                depths[erase] = 0.0
+            else:
+                # Fuse only foreground surfaces
+                depths[alpha < 0.5] = 0.0
+            
+            color_images.append(colors.squeeze().cpu())  # [H, W, 3]
+            depth_images.append(depths.squeeze().cpu())  # [H, W]
+
+            c2w_mats.append(c2w.squeeze().cpu())  # [4, 4]
+            K_mats.append(K.squeeze().cpu())      # [3, 3]
+
+        volume = o3d.pipelines.integration.ScalableTSDFVolume(
+            voxel_length=voxel_size,
+            sdf_trunc=sdf_trunc,
+            color_type=o3d.pipelines.integration.TSDFVolumeColorType.RGB8
+        )
+
+        for idx in tqdm(range(len(depth_images)), desc="[>] TSDF Fusion", ncols=128):
+            color_image = color_images[idx].numpy()  # [H, W, 3]
+            depth_image = depth_images[idx].numpy()  # [H, W]
+
+            color_u8 = (color_image * 255.0).clip(0, 255).astype(np.uint8)
+            depth_mm = (depth_image * 1000.0).clip(0, 65535).astype(np.uint16)
+
+            color = o3d.geometry.Image(np.ascontiguousarray(color_u8))
+            depth = o3d.geometry.Image(np.ascontiguousarray(depth_mm))
+            rgb_d = o3d.geometry.RGBDImage.create_from_color_and_depth(
+                color=color, depth=depth, depth_scale=1000.0,
+                depth_trunc=max_depth, convert_rgb_to_intensity=False
+            )
+
+            K_np = K_mats[idx].numpy()  # [3, 3]
+            H, W = depth_images[idx].shape[:2]
+            intrinsic = o3d.camera.PinholeCameraIntrinsic(
+                width=W,
+                height=H,
+                fx=K_np[0, 0],
+                fy=K_np[1, 1],
+                cx=K_np[0, 2],
+                cy=K_np[1, 2],
+            )
+
+            c2w_np = c2w_mats[idx].numpy()  # [4, 4]
+            w2c_np = np.linalg.inv(c2w_np).astype(np.float64)
+
+            volume.integrate(rgb_d, intrinsic, w2c_np)
+
+        return volume
+
 
     @torch.no_grad()
     def run_compression(self, step: int):
@@ -1573,36 +1814,3 @@ class Runner:
                 apply_float_colormap(alpha, render_tab_state.colormap).cpu().numpy()
             )
         return renders
-
-
-def main(local_rank: int, world_rank, world_size: int, cfg: Config):
-    # Import post-processing modules based on configuration
-    # These imports must be here (not in __main__) for distributed workers
-    if cfg.post_processing == "bilateral_grid":
-        global BilateralGrid, slice, total_variation_loss
-        from fused_bilagrid import BilateralGrid, slice, total_variation_loss
-    elif cfg.post_processing == "ppisp":
-        global PPISP, PPISPConfig, export_ppisp_report
-        from ppisp import PPISP, PPISPConfig
-        from ppisp.report import export_ppisp_report
-
-    if world_size > 1 and not cfg.disable_viewer:
-        cfg.disable_viewer = True
-        if world_rank == 0:
-            print("Viewer is disabled in distributed training.")
-
-    # Init runner and start training
-    runner = Runner(local_rank, world_rank, world_size, cfg)
-    runner.train()
-    runner.export_ppisp_reports()
-
-    if not cfg.disable_viewer:
-        runner.viewer.complete()
-        print("Viewer running... Ctrl+C to exit.")
-        # time.sleep(1000000)
-        try:
-            while True:
-                time.sleep(1)
-        except KeyboardInterrupt:
-            print("\nShutting down viewer...")
-            runner.server.stop()

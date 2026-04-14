@@ -54,7 +54,11 @@ class Dataset:
 
     def __getitem__(self, item: int) -> Dict[str, Any]:
         index = self.indices[item]
-        image = imageio.imread(self.parser.image_paths[index])[..., :3]
+        
+        input = imageio.imread(self.parser.image_paths[index])
+        image = input[..., :3]  # [H, W, 3]
+        alpha = input[..., 3:]  # [H, W, 1]
+        
         camera_id = self.parser.camera_ids[index]
         K = self.parser.Ks_dict[camera_id].copy()  # undistorted K
         params = self.parser.params_dict[camera_id]
@@ -84,6 +88,7 @@ class Dataset:
             "K": torch.from_numpy(K).float(),
             "camtoworld": torch.from_numpy(camtoworlds).float(),
             "image": torch.from_numpy(image).float(),
+            "alpha": torch.from_numpy(alpha).float(),
             "image_id": item,  # the index of the image in the dataset
             "camera_idx": self.parser.camera_indices[
                 index

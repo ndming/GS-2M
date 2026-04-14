@@ -1,6 +1,8 @@
 import random
+import copy
 
 import numpy as np
+import open3d as o3d
 import torch
 from sklearn.neighbors import NearestNeighbors
 from torch import Tensor
@@ -223,6 +225,7 @@ def apply_depth_colormap(
         img = img * acc + (1.0 - acc)
     return img
 
+
 def fix_normal_coordinates(normal_map):
     # Flatten and normalize normals
     normals = normal_map.view(-1, 3).clone()  # [H * W, 3]
@@ -236,3 +239,53 @@ def fix_normal_coordinates(normal_map):
     normals = normals * 0.5 + 0.5 # [-1, 1] -> [0, 1]
     H, W = normal_map.shape[1:3]
     return normals.view(1, H, W, 3)
+
+
+def post_process_mesh(mesh, cluster_to_keep=1, min_triangles=32):
+    """
+    Post-process a mesh to filter out floaters and disconnected parts.
+    cluster_to_keep=0 : keep all clusters regardless of rank
+    min_triangles=0   : keep all clusters regardless of size
+    """
+    post = copy.deepcopy(mesh)
+    with o3d.utility.VerbosityContextManager(o3d.utility.VerbosityLevel.Error):
+        triangle_clusters, cluster_n_triangles, _ = post.cluster_connected_triangles()
+
+    triangle_clusters   = np.asarray(triangle_clusters)
+    cluster_n_triangles = np.asarray(cluster_n_triangles)
+
+    print(f"[>] Found {len(cluster_n_triangles)} clusters, largest has {cluster_n_triangles.max()} triangles")
+
+    # Build per-triangle boolean mask
+    counts_per_triangle = cluster_n_triangles[triangle_clusters]
+
+    rank_mask = np.zeros(len(cluster_n_triangles), dtype=bool)
+    if cluster_to_keep == 0:
+        print(f"[>] Keeping all clusters")
+        rank_mask[:] = True
+    else:
+        print(f"[>] Keeping {cluster_to_keep} clusters in decreasing number of triangles")
+        rank_threshold = np.sort(cluster_n_triangles)[-cluster_to_keep]
+        rank_mask = cluster_n_triangles >= rank_threshold
+
+    size_mask = (counts_per_triangle >= min_triangles) if min_triangles > 0 \
+                else np.ones(len(triangle_clusters), dtype=bool)  # keep all
+
+    # A triangle survives only if its cluster passes BOTH filters
+    cluster_passes_rank = rank_mask[triangle_clusters]
+    triangles_to_remove = ~(cluster_passes_rank & size_mask)
+
+    post.remove_triangles_by_mask(triangles_to_remove)
+    post.remove_unreferenced_vertices()
+    post.remove_degenerate_triangles()
+
+    remaining = len(np.asarray(post.triangles))
+    print(f"[>] Removed {triangles_to_remove.sum()} triangles, {remaining} remaining")
+
+    return post
+
+
+def write_mesh(path, mesh):
+    o3d.io.write_triangle_mesh(
+        str(path), mesh, write_triangle_uvs=True, write_vertex_colors=True, write_vertex_normals=True)
+    print(f"[>] Mesh written to: {path}")

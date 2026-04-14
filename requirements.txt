@@ -5,6 +5,7 @@ open3d==0.18.0
 opencv-python
 piexif
 plyfile
+pyrender
 scikit-image
 scikit-learn
 tqdm

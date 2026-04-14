@@ -1,9 +1,32 @@
+import time
 import tyro
 
 from gsplat.distributed import cli
 from gsplat.strategy import DefaultStrategy, MCMCStrategy
 
-from scene import Config, main
+from scene import Config, Runner
+
+
+def main(local_rank: int, world_rank, world_size: int, cfg: Config):
+    if world_size > 1 and not cfg.disable_viewer:
+        cfg.disable_viewer = True
+        if world_rank == 0:
+            print("Viewer is disabled in distributed training.")
+
+    # Init runner and start training
+    runner = Runner(local_rank, world_rank, world_size, cfg)
+    runner.train()
+    runner.export_ppisp_reports()
+
+    if not cfg.disable_viewer:
+        runner.viewer.complete()
+        print("Viewer running... Ctrl+C to exit.")
+        try:
+            while True:
+                time.sleep(1)
+        except KeyboardInterrupt:
+            print("\nShutting down viewer...")
+            runner.server.stop()
 
 
 if __name__ == "__main__":
