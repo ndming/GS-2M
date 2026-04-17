@@ -1512,7 +1512,7 @@ class Runner:
         K = torch.from_numpy(list(self.parser.Ks_dict.values())[0]).float().to(device)
         width, height = list(self.parser.imsize_dict.values())[0]
 
-        # Build pyrender scene one
+        # Build pyrender scene once
         tm = trimesh.load(str(mesh_file), force="mesh")
         tm.visual = trimesh.visual.ColorVisuals()  # drops vertex colors, textures
         py_mesh = pyrender.Mesh.from_trimesh(
@@ -1626,7 +1626,15 @@ class Runner:
             print(f" - {path.name}")
 
     @torch.no_grad()
-    def run_tsdf_fusion(self, max_depth, voxel_size, sdf_trunc, bounds=None):
+    def run_tsdf_mesh_extraction(
+        self, 
+        max_depth: float = 10.0,
+        voxel_size: float = 0.02,
+        sdf_trunc_factor: float = 4.0,
+        bounds=None,
+    ):
+        """Single-level TSDF fusion"""
+
         assert self.world_size == 1, "TSDF fusion cannot be run in distributed mode"
         render_mode = self.render_mode
         if "D" not in render_mode:
@@ -1639,7 +1647,7 @@ class Runner:
         depth_images = []
         c2w_mats = []
         K_mats = []
-        for data in tqdm(loader, desc="[>] Rendering", ncols=128):
+        for data in tqdm(loader, desc="[1/3] Rendering", ncols=128):
             c2w = data["camtoworld"].to(device)  # [1, 4, 4]
             K = data["K"].to(device)             # [1, 3, 3]
             masks = data["mask"].to(device) if "mask" in data else None
@@ -1667,7 +1675,9 @@ class Runner:
             )  # [1, H, W, ...]
 
             colors = torch.clamp(renders[..., :3], 0.0, 1.0)  # [1, H, W, 3]
-            depths = renders[..., 3:4]                        # [1, H, W, 1]
+            depths = renders[..., 3:4].clone()                # [1, H, W, 1]
+            depths[alpha < 0.5]        = 0.0
+            depths[depths > max_depth] = 0.0
 
             if bounds is not None:
                 # bounds is a [3, 2] array where each row is the valid range
@@ -1677,9 +1687,6 @@ class Runner:
                         (points[..., 1] < bounds[1, 0]) | (points[..., 1] > bounds[1, 1]) |\
                         (points[..., 2] < bounds[2, 0]) | (points[..., 2] > bounds[2, 1])
                 depths[erase] = 0.0
-            else:
-                # Fuse only foreground surfaces
-                depths[alpha < 0.5] = 0.0
             
             color_images.append(colors.squeeze().cpu())  # [H, W, 3]
             depth_images.append(depths.squeeze().cpu())  # [H, W]
@@ -1689,11 +1696,11 @@ class Runner:
 
         volume = o3d.pipelines.integration.ScalableTSDFVolume(
             voxel_length=voxel_size,
-            sdf_trunc=sdf_trunc,
+            sdf_trunc=sdf_trunc_factor * voxel_size,
             color_type=o3d.pipelines.integration.TSDFVolumeColorType.RGB8
         )
 
-        for idx in tqdm(range(len(depth_images)), desc="[>] TSDF Fusion", ncols=128):
+        for idx in tqdm(range(len(depth_images)), desc="[2/3] TSDF Fusion", ncols=128):
             color_image = color_images[idx].numpy()  # [H, W, 3]
             depth_image = depth_images[idx].numpy()  # [H, W]
 
@@ -1723,7 +1730,224 @@ class Runner:
 
             volume.integrate(rgb_d, intrinsic, w2c_np)
 
-        return volume
+        print(f"[3/3] Extracting mesh from TSDF volume...")
+        mesh = volume.extract_triangle_mesh()
+        print(f"[>] Done extraction, num vertices: {len(mesh.vertices):,}")
+
+        return mesh
+
+
+    @torch.no_grad()
+    def run_hierarchical_tsdf_mesh_extraction(
+        self,
+        max_depth: float = 10.0,
+        base_voxel_size: float = 0.02,
+        num_levels: int = 4,
+        sdf_trunc_factor: float = 4.0,
+        bounds=None,
+    ):
+        """Multi-level hierarchical sparse TSDF mesh extraction"""
+        
+        from scipy.spatial import cKDTree
+        assert self.world_size == 1, "TSDF fusion cannot be run in distributed mode"
+    
+        # Level voxel sizes: base, base*2, base*4, ...
+        voxel_sizes = [base_voxel_size * (2 ** i) for i in range(num_levels)]
+
+        # Level shell radii: geometrically spaced from base_voxel*50 to scene_scale
+        # innermost radius is where fine detail matters (~50 voxels worth)
+        r_inner = base_voxel_size * 50.0
+        # [r_inner, ..., scene_scale] with n_levels-1 boundaries → n_levels shells
+        # level i covers [level_radii[i], level_radii[i+1])
+        # except level 0 starts at 0 and level n_levels-1 ends at infinity
+        scene_scale = self.scene_scale
+        level_radii = np.geomspace(r_inner, scene_scale, num_levels + 1)
+
+        for i in range(num_levels):
+            r_lo = 0.0          if i == 0              else level_radii[i]
+            r_hi = float("inf") if i == num_levels - 1 else level_radii[i + 1]
+            print(f"--- Level {i}: voxel={voxel_sizes[i]:.4f}m | shell=[{r_lo:.2f}m, {r_hi:.2f}m)")
+    
+        assert all(v > 0 for v in voxel_sizes)
+        assert max_depth < 1000, "max_depth should be in metres"
+    
+        device = self.device
+
+        # Camera locus KD-tree
+        camera_positions = np.array([c2w[:3, 3] for c2w in self.parser.camtoworlds])
+        cam_tree = cKDTree(camera_positions)
+
+        # Build one TSDF volume per level
+        volumes = [
+            o3d.pipelines.integration.ScalableTSDFVolume(
+                voxel_length=voxel_sizes[i],
+                sdf_trunc=sdf_trunc_factor * voxel_sizes[i],
+                color_type=o3d.pipelines.integration.TSDFVolumeColorType.NoColor,
+            )
+            for i in range(num_levels)
+        ]
+
+        loader = torch.utils.data.DataLoader(
+            self.trainset, batch_size=1, shuffle=False, num_workers=1
+        )
+
+        # Render & integrate
+        for data in tqdm(loader, desc="[1/4] Rendering depth maps", ncols=128):
+            c2w   = data["camtoworld"].to(device)    # [1, 4, 4]
+            K     = data["K"].to(device)             # [1, 3, 3]
+            alpha = data["alpha"].to(device) / 255.0 # [1, H, W, 1]
+            H, W  = data["image"].shape[1:3]
+
+            renders, _, _ = self.rasterize_splats(
+                camtoworlds=c2w, Ks=K,
+                width=W, height=H,
+                sh_degree=self.cfg.sh_degree,
+                near_plane=self.cfg.near_plane,
+                far_plane=self.cfg.far_plane,
+                render_mode="PD",
+            )
+
+            depths = renders.clone()                  # [1, H, W, 1]
+            depths[alpha < 0.5]        = 0.0
+            depths[depths > max_depth] = 0.0
+
+            if bounds is not None:
+                bounds_t = torch.tensor(bounds, device=device, dtype=torch.float32)
+                pts_w = depth_to_points(depths, c2w, K, z_depth=True)
+                oob = (
+                    (pts_w[..., 0] < bounds_t[0, 0]) | (pts_w[..., 0] > bounds_t[0, 1]) |
+                    (pts_w[..., 1] < bounds_t[1, 0]) | (pts_w[..., 1] > bounds_t[1, 1]) |
+                    (pts_w[..., 2] < bounds_t[2, 0]) | (pts_w[..., 2] > bounds_t[2, 1])
+                )
+                depths[oob.unsqueeze(-1)] = 0.0
+
+            # Depth to numpy, discontinuity filter
+            depth_np = depths.squeeze(0).squeeze(-1).cpu().numpy()  # [H, W]
+
+            dz_dx = np.zeros_like(depth_np)
+            dz_dy = np.zeros_like(depth_np)
+            dz_dx[:, 1:-1] = (depth_np[:, 2:] - depth_np[:, :-2]) * 0.5
+            dz_dy[1:-1, :] = (depth_np[2:, :] - depth_np[:-2, :]) * 0.5
+            K_np = K.squeeze(0).cpu().numpy()
+            norms_len = np.sqrt(
+                (dz_dx / K_np[0, 0])**2 +
+                (dz_dy / K_np[1, 1])**2 + 1.0
+            )
+            boundary = np.pad(np.ones((H-2, W-2), bool), 1, constant_values=False)
+            valid = (depth_np > 0) & (norms_len < 10.0) & boundary  # [H, W]
+
+            # Unproject valid pixels → world space → per-level masks
+            c2w_np = c2w.squeeze(0).cpu().numpy()
+            w2c_np = np.linalg.inv(c2w_np).astype(np.float64)
+    
+            ys, xs = np.where(valid)
+            if len(ys) == 0:
+                continue
+
+            zs = depth_np[ys, xs]
+            pts_cam = np.stack([
+                (xs - K_np[0, 2]) * zs / K_np[0, 0],
+                (ys - K_np[1, 2]) * zs / K_np[1, 1],
+                zs,
+            ], axis=-1)                                                  # [N, 3]
+            pts_world = (c2w_np[:3, :3] @ pts_cam.T + c2w_np[:3, 3:4]).T # [N, 3]
+            dists, _ = cam_tree.query(pts_world, k=1)                    # [N]
+
+            # Assign each valid pixel to exactly one level
+            level_masks = []
+            for i in range(num_levels):
+                r_lo = 0.0          if i == 0              else level_radii[i]
+                r_hi = float("inf") if i == num_levels - 1 else level_radii[i + 1]
+                pixel_in_level = (dists >= r_lo) & (dists < r_hi)
+                mask = np.zeros((H, W), dtype=bool)
+                mask[ys[pixel_in_level], xs[pixel_in_level]] = True
+                level_masks.append(mask)
+
+            # Integrate each level
+            intrinsic = o3d.camera.PinholeCameraIntrinsic(
+                width=W, height=H,
+                fx=K_np[0,0], fy=K_np[1,1],
+                cx=K_np[0,2], cy=K_np[1,2],
+            )
+            gray_u8 = np.full((H, W, 3), 128, dtype=np.uint8)
+
+            for vol, mask in zip(volumes, level_masks):
+                dep = depth_np.copy()
+                dep[~(mask & valid)] = 0.0   # apply both spatial mask AND discontinuity filter
+                if dep.max() <= 0:
+                    continue
+                dep_u16 = np.ascontiguousarray((dep * 1000.0).clip(0, 65535).astype(np.uint16))
+                rgbd = o3d.geometry.RGBDImage.create_from_color_and_depth(
+                    color=o3d.geometry.Image(np.ascontiguousarray(gray_u8)),
+                    depth=o3d.geometry.Image(dep_u16),
+                    depth_scale=1000.0,
+                    depth_trunc=max_depth,
+                    convert_rgb_to_intensity=False,
+                )
+                vol.integrate(rgbd, intrinsic, w2c_np)
+
+        # Extract meshes from all levels
+        print("[2/4] Extracting meshes from all levels...")
+        meshes_v, meshes_f = [], []
+        for i, vol in enumerate(volumes):
+            m = vol.extract_triangle_mesh()
+            v = np.asarray(m.vertices)
+            f = np.asarray(m.triangles)
+            if f.ndim == 1:
+                f = f.reshape(0, 3)
+            print(f"--/-- Level {i}: {len(f):>10,} triangles")
+            meshes_v.append(v)
+            meshes_f.append(f)
+
+        # Remove overlap: coarser levels drop triangles inside finer shells
+        # Level i removes triangles whose centroids fall within level i-1's shell
+        # Keep a small overlap band (×0.95) to avoid gaps at boundaries
+        print("[3/4] Removing inter-level overlaps...")
+        for i in range(1, num_levels):
+            f = meshes_f[i]
+            if len(f) == 0:
+                continue
+            v = meshes_v[i]
+            centroids = v[f].mean(axis=1)                    # [M, 3]
+            dists_c, _ = cam_tree.query(centroids, k=1)
+            keep = dists_c >= level_radii[i] * 0.95          # thin overlap band at boundary
+            f = f[keep]
+
+            if len(f) > 0:
+                used = np.unique(f)
+                remap = np.full(len(v), -1, dtype=np.int64)
+                remap[used] = np.arange(len(used))
+                meshes_v[i] = v[used]
+                meshes_f[i] = remap[f]
+            else:
+                meshes_v[i] = np.zeros((0, 3), dtype=np.float64)
+                meshes_f[i] = np.zeros((0, 3), dtype=np.int64)
+
+            print(f"--/-- Level {i}: {len(meshes_f[i]):>10,} triangles (after overlap removal)")
+
+        # Stitch all levels
+        combined_v, combined_f = [], []
+        offset = 0
+        for v, f in zip(meshes_v, meshes_f):
+            if len(f) == 0:
+                continue
+            combined_v.append(v)
+            combined_f.append(f + offset)
+            offset += len(v)
+
+        combined_v = np.concatenate(combined_v, axis=0)
+        combined_f = np.concatenate(combined_f, axis=0)
+        print(f"[4/4] Stitched: {len(combined_f):,} triangles total")
+
+        combined = o3d.geometry.TriangleMesh()
+        combined.vertices  = o3d.utility.Vector3dVector(combined_v)
+        combined.triangles = o3d.utility.Vector3iVector(combined_f)
+        combined.remove_degenerate_triangles()
+        combined.remove_duplicated_vertices()
+        combined.remove_unreferenced_vertices()
+        combined.compute_vertex_normals()
+
+        return combined
 
 
     @torch.no_grad()

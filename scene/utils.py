@@ -241,11 +241,9 @@ def fix_normal_coordinates(normal_map):
     return normals.view(1, H, W, 3)
 
 
-def post_process_mesh(mesh, cluster_to_keep=1, min_triangles=32):
+def post_process_mesh(mesh, cluster_to_keep=128, min_triangles=0, decimate_target=0):
     """
-    Post-process a mesh to filter out floaters and disconnected parts.
-    cluster_to_keep=0 : keep all clusters regardless of rank
-    min_triangles=0   : keep all clusters regardless of size
+    Filter out disconnected parts and performs mesh decimation.
     """
     post = copy.deepcopy(mesh)
     with o3d.utility.VerbosityContextManager(o3d.utility.VerbosityLevel.Error):
@@ -254,7 +252,7 @@ def post_process_mesh(mesh, cluster_to_keep=1, min_triangles=32):
     triangle_clusters   = np.asarray(triangle_clusters)
     cluster_n_triangles = np.asarray(cluster_n_triangles)
 
-    print(f"[>] Found {len(cluster_n_triangles)} clusters, largest has {cluster_n_triangles.max()} triangles")
+    print(f"[>] Found {len(cluster_n_triangles):,} clusters, largest has {cluster_n_triangles.max():,} triangles")
 
     # Build per-triangle boolean mask
     counts_per_triangle = cluster_n_triangles[triangle_clusters]
@@ -274,13 +272,30 @@ def post_process_mesh(mesh, cluster_to_keep=1, min_triangles=32):
     # A triangle survives only if its cluster passes BOTH filters
     cluster_passes_rank = rank_mask[triangle_clusters]
     triangles_to_remove = ~(cluster_passes_rank & size_mask)
-
     post.remove_triangles_by_mask(triangles_to_remove)
+    post.compute_vertex_normals()
+
+    # Clean up seam artifacts
+    post.remove_duplicated_vertices()
     post.remove_unreferenced_vertices()
     post.remove_degenerate_triangles()
 
+    # Decimate
+    n_tri = len(np.asarray(post.triangles))
+    n_tri_decimate = 0
+    if decimate_target > 0 and n_tri > decimate_target:
+        n_tri_decimate = n_tri - decimate_target
+        print(f"[>] Decimating {n_tri:,} to {decimate_target:,} triangles...")
+        post = post.simplify_quadric_decimation(decimate_target)
+        post.compute_vertex_normals()
+        post.remove_degenerate_triangles()
+        post.remove_unreferenced_vertices()
+    else:
+        print(f"[>] Skipping decimation")
+
     remaining = len(np.asarray(post.triangles))
-    print(f"[>] Removed {triangles_to_remove.sum()} triangles, {remaining} remaining")
+    print(f"[>] Removed {triangles_to_remove.sum() + n_tri_decimate:,} triangles, {remaining:,} remaining")
+    print(f"[>] Num vertices post-process: {len(post.vertices):,}")
 
     return post
 
