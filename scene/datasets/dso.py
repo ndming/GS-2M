@@ -9,6 +9,7 @@ import open3d as o3d
 import numpy as np
 
 from pycolmap.rotation import Quaternion
+from tqdm import tqdm
 from .utils import process_input_images, process_input_depths
 
 
@@ -131,16 +132,18 @@ def _read_calibration(calib_file, factor):
     return Ks_dict, imsize_dict, params_dict
 
 
-def _read_points(pcd_dir, image_names, kf_poses):
+def _read_points(pcd_dir, image_paths, kf_poses, camera_ids, Ks_dict):
     points = []
     points_rgb = []
     point_indices = {}
 
     global_offset = 0 # tracks index in concatenated array
 
-    for name, pose in zip(image_names, kf_poses):
-        stamp = Path(name).stem
-        pcd_file = pcd_dir / f"{stamp}.pcd"
+    for id, (path, pose) in tqdm(enumerate(zip(image_paths, kf_poses)), desc="[>] Reading points", ncols=128):
+        image_file = Path(path)
+        name = image_file.name
+        stem = image_file.stem
+        pcd_file = pcd_dir / f"{stem}.pcd"
 
         if not pcd_file.exists():
             point_indices[name] = np.empty((0,), dtype=np.int32)
@@ -148,11 +151,35 @@ def _read_points(pcd_dir, image_names, kf_poses):
 
         # Load PCD
         pcd = o3d.io.read_point_cloud(str(pcd_file))
-        pts = np.asarray(pcd.points) # [N, 3]
+        pts = np.asarray(pcd.points) # [N, 3] 
 
         if pts.shape[0] == 0:
             point_indices[name] = np.empty((0,), dtype=np.int32)
             continue
+
+        # Load and project points to images to sample colors
+        K = Ks_dict[camera_ids[id]]                            # [3, 3]
+        img = imageio.imread(image_file)[..., :3]  # [H, W, 3]
+        H, W = img.shape[:2]
+
+        uvw = (K @ pts.T)  # [3, N]
+        z   = uvw[2]       # [N] depth in camera frame
+        u = uvw[0] / np.clip(z, 1e-6, None)  # [N]
+        v = uvw[1] / np.clip(z, 1e-6, None)  # [N]
+
+        valid = (
+            (z > 0) &
+            (u >= 0) & (u < W) &
+            (v >= 0) & (v < H)
+        )
+
+        # Sample colors for valid points (nearest-neighbour)
+        colors = np.random.uniform(0.0, 0.5, size=(pts.shape[0], 3)).astype(np.float32)
+        if valid.any():
+            px = np.round(u[valid]).astype(np.int32).clip(0, W - 1)
+            py = np.round(v[valid]).astype(np.int32).clip(0, H - 1)
+            sampled = img[py, px]  # [M, 3]  uint8
+            colors[valid] = sampled.astype(np.float32) / 255.0
 
         # Transform to world, pose is c2w [4, 4]
         R = pose[:3, :3] # [3, 3]
@@ -165,8 +192,7 @@ def _read_points(pcd_dir, image_names, kf_poses):
         point_indices[name] = inds
 
         points.append(pts_world)
-        # Don't initialize colors to pure black which otherwise would break PPISP gradient flows
-        points_rgb.append(np.random.uniform(0.0, 0.5, size=(N, 3)).astype(np.float32))
+        points_rgb.append(colors)
 
         global_offset += N
 
@@ -281,13 +307,14 @@ class Parser:
         
         image_paths = process_input_images(
             str(dso_image_dir), str(processed_image_dir), image_names, factor, reuse=reuse_processed_images,
-            mask_image=mask_gt_image)
+            mask_image=mask_gt_image
+        )
         depth_paths = process_input_depths(
             str(dso_depth_dir), str(processed_depth_dir), image_names, factor, reuse=reuse_processed_images,
         )
         
         pcd_dir = Path(data_dir) / "output" / "clouds"
-        points, points_rgb, point_indices = _read_points(pcd_dir, image_names, kf_poses)
+        points, points_rgb, point_indices = _read_points(pcd_dir, image_paths, kf_poses, camera_ids, Ks_dict)
         points_err = None
 
         # Load extended metadata. Used by Bilarf dataset.
