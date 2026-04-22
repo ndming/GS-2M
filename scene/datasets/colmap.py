@@ -174,8 +174,18 @@ class Parser:
             k: np.array(v).astype(np.int32) for k, v in point_indices.items()
         }
 
-        # Normalize the world space.
-        if normalize:
+        transform = np.eye(4)
+        if kwargs.get("center_world_space", False):
+            # Recenter the world space, preserve all scaling and orientations
+            scene_center = np.median(camtoworlds[:, :3, 3], axis=0)
+            if kwargs.get("center_preserve_z", False):
+                scene_center[2] = 0.0
+
+            transform[:3, 3] = -scene_center
+            camtoworlds = transform_cameras(transform, camtoworlds)
+            points = transform_points(transform, points)
+        elif normalize:
+            # Normalize the world space
             T1 = similarity_from_cameras(camtoworlds)
             camtoworlds = transform_cameras(T1, camtoworlds)
             points = transform_points(T1, points)
@@ -202,8 +212,6 @@ class Parser:
                 camtoworlds = transform_cameras(T3, camtoworlds)
                 points = transform_points(T3, points)
                 transform = T3 @ transform
-        else:
-            transform = np.eye(4)
 
         self.image_names = image_names  # List[str], (num_images,)
         self.image_paths = image_paths  # List[str], (num_images,)

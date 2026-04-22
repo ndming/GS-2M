@@ -71,6 +71,10 @@ class Config:
     global_scale: float = 1.0
     # Normalize the world space
     normalize_world_space: bool = True
+    # Center the world space, preserving scales and orientation, disabled if normalize_world_space is True
+    center_world_space: bool = False
+    # Preserve camera z coordinates for center_world_space, only applies if center_world_space is True
+    center_preserve_z: bool = True
     # Camera model
     camera_model: Literal["pinhole", "ortho", "fisheye"] = "pinhole"
     # Load EXIF exposure metadata from images (if available)
@@ -208,8 +212,6 @@ class Config:
     depth_image_max_distance: float = 10.0
     # Weight for depth loss
     depth_lambda: float = 1e-2
-    # Let the pipeline know if poses, sparse points, and depth GT already in metric scale
-    metric_scale: bool = False
 
     # Mutli-view observation trimming
     multi_view_observe_trim: bool = False
@@ -238,6 +240,13 @@ class Config:
         self.max_steps = int(self.max_steps * factor)
         self.sh_degree_interval = int(self.sh_degree_interval * factor)
 
+        self.ppisp_controller_activation_num_steps = int(
+            self.ppisp_controller_activation_num_steps * factor
+        )
+
+        self.depth_image_loss_from_step = int(self.depth_image_loss_from_step * factor)
+        self.depth_normal_loss_from_step = int(self.depth_normal_loss_from_step * factor)
+
         strategy = self.strategy
         if isinstance(strategy, DefaultStrategy):
             strategy.refine_start_iter = int(strategy.refine_start_iter * factor)
@@ -247,6 +256,7 @@ class Config:
         elif isinstance(strategy, MCMCStrategy):
             strategy.refine_start_iter = int(strategy.refine_start_iter * factor)
             strategy.refine_stop_iter = int(strategy.refine_stop_iter * factor)
+            strategy.teleport_stop_iter = int(strategy.teleport_stop_iter * factor)
             strategy.refine_every = int(strategy.refine_every * factor)
             if strategy.noise_injection_stop_iter >= 0:
                 strategy.noise_injection_stop_iter = int(
@@ -408,6 +418,8 @@ class Runner:
             load_exposure=cfg.load_exposure,
             mask_gt_image=cfg.mask_gt_image,
             reuse_processed_images=cfg.reuse_processed_images,
+            center_world_space=cfg.center_world_space,
+            center_preserve_z=cfg.center_preserve_z,
             num_offset_frames=cfg.num_offset_frames,
             num_stride_frames=cfg.num_stride_frames,
         )
@@ -969,16 +981,14 @@ class Runner:
                 disp = torch.where(depths > 0.0, 1.0 / depths, torch.zeros_like(depths))
                 disp_gt = 1.0 / depth_values  # [1, M]
 
-                scale = 1.0 if cfg.metric_scale else self.scene_scale
-                depth_loss = F.l1_loss(disp, disp_gt) * scale
+                depth_loss = F.l1_loss(disp, disp_gt) * self.scene_scale
                 loss += depth_loss * cfg.depth_lambda
 
-            # Supervise rendered depths with prior depth images
+            # Supervise rendered depths with prior depth images, assumming both have the same scale
             if cfg.depth_image_loss and step >= cfg.depth_image_loss_from_step:
                 depth_valid_mask = (depth_image > 0) & (depth_image < cfg.depth_image_max_distance) & (depths > 0)
                 if depth_valid_mask.any():
-                    scale = 1.0 if cfg.metric_scale else self.scene_scale
-                    depth_loss = F.l1_loss(depths[depth_valid_mask], depth_image[depth_valid_mask]) * scale
+                    depth_loss = F.l1_loss(depths[depth_valid_mask], depth_image[depth_valid_mask])
                     loss += depth_loss * cfg.depth_lambda
 
             # Depth-normal consistency

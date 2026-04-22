@@ -80,4 +80,8 @@ if __name__ == "__main__":
         if version.parse(torch.__version__) < version.parse("2.9"):
             warnings.filterwarnings("ignore", category=UserWarning, module="torch.optim.lr_scheduler")
 
+    if cfg.normalize_world_space and cfg.center_world_space:
+        print("[!] Disabling world space centering: normalize_world_space is enabled and takes precedence")
+        cfg.center_world_space = False
+
     cli(main, cfg, verbose=True)

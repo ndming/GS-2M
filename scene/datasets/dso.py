@@ -10,6 +10,8 @@ import numpy as np
 
 from pycolmap.rotation import Quaternion
 from tqdm import tqdm
+
+from .normalize import transform_cameras, transform_points
 from .utils import process_input_images, process_input_depths
 
 
@@ -334,9 +336,20 @@ class Parser:
             self.bounds = np.load(pose_file)[:, -2:]
 
         transform = np.eye(4)
-        if normalize:
+        if kwargs.get("center_world_space", False):
+            # Recenter the world space, preserve all scaling and orientations
+            scene_center = np.median(c2w_mats[:, :3, 3], axis=0)
+            if kwargs.get("center_preserve_z", False):
+                scene_center[2] = 0.0
+
+            transform[:3, 3] = -scene_center
+            c2w_mats = transform_cameras(transform, c2w_mats)
+            points = transform_points(transform, points)
+        elif normalize:
             # We're not supporting scene normalization for DSO dataset because of c2w convention
-            raise ValueError(f"Scene normalization is currently not supported for DSO dataset")
+            raise ValueError(
+                "Scene normalization breaks metric scale for DSO scenes, disable with --no-normalize-world-space"
+            )
 
         self.image_names = image_names  # List[str], (num_images,)
         self.image_paths = image_paths  # List[str], (num_images,)
