@@ -162,6 +162,8 @@ class Config:
     opacity_reg: float = 0.0
     # Scale regularization
     scale_reg: float = 0.0
+    # Alpha regularization
+    alpha_reg: float = 0.0
 
     # Enable camera optimization.
     pose_opt: bool = False
@@ -884,9 +886,10 @@ class Runner:
 
             camtoworlds = camtoworlds_gt = data["camtoworld"].to(device)  # [1, 4, 4]
             Ks = data["K"].to(device)  # [1, 3, 3]
-            pixels = data["image"].to(device) / 255.0  # [1, H, W, 3]
+            gt_image = data["image"].to(device) / 255.0  # [1, H, W, 3]
+            gt_alpha = data["alpha"].to(device) / 255.0  # [1, H, W, 1]
             num_train_rays_per_step = ( # B * H * W
-                pixels.shape[0] * pixels.shape[1] * pixels.shape[2]
+                gt_image.shape[0] * gt_image.shape[1] * gt_image.shape[2]
             )
             image_ids = data["image_id"].to(device)
             masks = data["mask"].to(device) if "mask" in data else None  # [1, H, W]
@@ -900,7 +903,7 @@ class Runner:
             if cfg.depth_image_loss:
                 depth_image = data["depth_image"].to(device) # [1, H, W, 1]
 
-            height, width = pixels.shape[1:3]
+            height, width = gt_image.shape[1:3]
 
             if cfg.pose_noise:
                 camtoworlds = self.pose_perturb(camtoworlds, image_ids)
@@ -945,11 +948,9 @@ class Runner:
             )
 
             # loss
-            l1loss = F.l1_loss(colors, pixels)
-            ssimloss = 1.0 - fused_ssim(
-                colors.permute(0, 3, 1, 2), pixels.permute(0, 3, 1, 2), padding="valid"
-            )
-            loss = l1loss * (1.0 - cfg.ssim_lambda) + ssimloss * cfg.ssim_lambda
+            Ll1 = F.l1_loss(colors, gt_image)
+            Lssim = 1.0 - fused_ssim(colors.permute(0, 3, 1, 2), gt_image.permute(0, 3, 1, 2), padding="valid")
+            loss = Ll1 * (1.0 - cfg.ssim_lambda) + Lssim * cfg.ssim_lambda
 
             # Supervise sampled depths from rendered depths with prior depth points
             if cfg.depth_point_loss:
@@ -982,13 +983,13 @@ class Runner:
 
             # Depth-normal consistency
             if cfg.depth_normal_lambda > 0.0 and "P" in self.render_mode and step >= cfg.depth_normal_loss_from_step:
-                def _get_img_grad_weight(gt_image):
+                def _get_img_grad_weight(gt_rgb):
                     # gt_image: [..., H, W, 3]
-                    *batch_dims, H, W, C = gt_image.shape
+                    *batch_dims, H, W, C = gt_rgb.shape
                     assert C == 3
 
                     # Move channels to NCHW
-                    gt_img = gt_image.permute(*range(len(batch_dims)), -1, -3, -2)  # [..., 3, H, W]
+                    gt_img = gt_rgb.permute(*range(len(batch_dims)), -1, -3, -2)  # [..., 3, H, W]
 
                     # Gradients
                     bottom = gt_img[..., :, 2:H,   1:W-1]
@@ -1013,7 +1014,7 @@ class Runner:
                 
                     return grad
 
-                weights = (1.0 - _get_img_grad_weight(pixels)).clamp(0, 1).detach() ** 2  # [..., H, W, 1]
+                weights = (1.0 - _get_img_grad_weight(gt_image)).clamp(0, 1).detach() ** 2  # [..., H, W, 1]
                 weights = weights.unsqueeze(-4)            # [..., 1, H, W, 1]
                 render_normals = info["render_normals_c"]  # [..., C, H, W, 3]
                 depth_normals  = info["depth_normals"]     # [..., C, H, W, 3]
@@ -1043,6 +1044,8 @@ class Runner:
                 loss += cfg.opacity_reg * torch.sigmoid(self.splats["opacities"]).mean()
             if cfg.scale_reg > 0.0:
                 loss += cfg.scale_reg * torch.exp(self.splats["scales"]).mean()
+            if cfg.alpha_reg > 0.0:
+                loss += cfg.alpha_reg * F.binary_cross_entropy(alphas, gt_alpha)
             if cfg.planar_reg > 0.0:
                 radii = info["radii"]                    # [..., C, N, 2]
                 valid_per_cam = (radii > 0).any(dim=-1)  # [..., C, N]
@@ -1073,8 +1076,8 @@ class Runner:
             if world_rank == 0 and cfg.tb_every > 0 and step % cfg.tb_every == 0:
                 mem = torch.cuda.max_memory_allocated() / 1024**3
                 self.writer.add_scalar("train/loss", loss.item(), step)
-                self.writer.add_scalar("train/l1loss", l1loss.item(), step)
-                self.writer.add_scalar("train/ssimloss", ssimloss.item(), step)
+                self.writer.add_scalar("train/l1loss", Ll1.item(), step)
+                self.writer.add_scalar("train/ssimloss", Lssim.item(), step)
                 self.writer.add_scalar("train/num_GS", len(self.splats["means"]), step)
                 self.writer.add_scalar("train/mem", mem, step)
                 if cfg.depth_point_loss or (cfg.depth_image_loss and step >= cfg.depth_image_loss_from_step):
@@ -1420,7 +1423,7 @@ class Runner:
         K = torch.from_numpy(list(self.parser.Ks_dict.values())[0]).float().to(device)
         width, height = list(self.parser.imsize_dict.values())[0]
 
-        # save to video
+        # Save all frames to video
         video_dir = f"{cfg.result_dir}/videos"
         os.makedirs(video_dir, exist_ok=True)
         writer = imageio.get_writer(f"{video_dir}/traj_{step + 1}.mp4", fps=30)
@@ -1447,15 +1450,23 @@ class Runner:
 
             colored_alphas = apply_float_colormap(alphas.squeeze(0), "gray").unsqueeze(0)   # [1, H, W, 3]
             colored_depths = apply_float_colormap(depths.squeeze(0), "magma").unsqueeze(0)  # [1, H, W, 3]
-            adated_normals = fix_normal_coordinates(meta["render_normals_c"])               # [1, H, W, 3]
+            camera_normals = fix_normal_coordinates(meta["render_normals_c"])               # [1, H, W, 3]
+
+            # Gaussians opacities are forced to match GT mask,
+            # setting the bg to white in the visualization
+            if cfg.mask_gt_image and cfg.alpha_reg > 0.0:
+                alpha_mask = alphas < 0.5  # [1, H, W, 1]
+                colors = torch.where(alpha_mask, 1.0, colors)
+                colored_depths = torch.where(alpha_mask, 1.0, colored_depths)
+                camera_normals = torch.where(alpha_mask, 1.0, camera_normals)
 
             # Buid canvas
             canvas_1st_row = torch.cat([colors, colored_alphas], dim=2)
-            canvas_2nd_row = torch.cat([colored_depths, adated_normals], dim=2)
+            canvas_2nd_row = torch.cat([colored_depths, camera_normals], dim=2)
             canvas = torch.cat([canvas_1st_row, canvas_2nd_row], dim=1).squeeze(0).cpu().numpy()
             canvas = (canvas * 255).astype(np.uint8)
 
-            # pad the frame to standard resolutions
+            # Pad the frame to standard resolutions
             FRAME_BLOCK_SIZE=16
             h, w, _ = canvas.shape
             pad_h = (FRAME_BLOCK_SIZE - h % FRAME_BLOCK_SIZE) % FRAME_BLOCK_SIZE
@@ -1544,7 +1555,7 @@ class Runner:
             Ks = K[None]
 
             # Render Gaussians
-            renders, _, meta = self.rasterize_splats(
+            renders, alphas, meta = self.rasterize_splats(
                 camtoworlds=camtoworlds,
                 Ks=Ks,
                 width=width,
@@ -1562,20 +1573,28 @@ class Runner:
             depths = torch.clamp(depths, 0.0, 1.0)
 
             colored_depths = apply_float_colormap(depths.squeeze(0), "magma").unsqueeze(0)  # [1, H, W, 3]
-            adated_normals = fix_normal_coordinates(meta["render_normals_c"])               # [1, H, W, 3]
+            camera_normals = fix_normal_coordinates(meta["render_normals_c"])               # [1, H, W, 3]
 
             # Render mesh
             c2w_np  = camtoworlds.squeeze(0).cpu().numpy()  # [4, 4]
             c2w_gl  = c2w_np @ FLIP_YZ                      # [4, 4]
             scene.set_pose(camera_node, pose=c2w_gl)
-            mesh_color_u8, _ = renderer.render(scene)                     # [H, W, 3] uint8
-            mesh_color_u8 = np.ascontiguousarray(mesh_color_u8.copy())    # make writable copy
-            mesh_color = torch.from_numpy(mesh_color_u8).float() / 255.0  # [H, W, 3]
-            mesh_color = mesh_color.unsqueeze(0).to(device)               # [1, H, W, 3]
+            mesh_color_u8, _ = renderer.render(scene)                   # [H, W, 3] uint8
+            mesh_color_u8 = np.ascontiguousarray(mesh_color_u8.copy())  # make writable copy
+            meshes = torch.from_numpy(mesh_color_u8).float() / 255.0    # [H, W, 3]
+            meshes = meshes.unsqueeze(0).to(device)                     # [1, H, W, 3]
+
+            # Set BG to white at regions with alpha < 0.5
+            if cfg.mask_gt_image and cfg.alpha_reg > 0.0:
+                alpha_mask = alphas < 0.5  # [1, H, W, 1]
+                colors = torch.where(alpha_mask, 1.0, colors)
+                meshes = torch.where(alpha_mask, 1.0, meshes)
+                colored_depths = torch.where(alpha_mask, 1.0, colored_depths)
+                camera_normals = torch.where(alpha_mask, 1.0, camera_normals)
 
             # Buid canvas
-            canvas_1st_row = torch.cat([colors, mesh_color], dim=2)
-            canvas_2nd_row = torch.cat([colored_depths, adated_normals], dim=2)
+            canvas_1st_row = torch.cat([colors, meshes], dim=2)
+            canvas_2nd_row = torch.cat([colored_depths, camera_normals], dim=2)
             canvas = torch.cat([canvas_1st_row, canvas_2nd_row], dim=1).squeeze(0).cpu().numpy()
             canvas = (canvas * 255).astype(np.uint8)
 
