@@ -6,6 +6,11 @@
 
 ![cover](media/cover.png)
 
+## Updates
+- **2026.03.11**: Migration to [gsplat](https://github.com/nerfstudio-project/gsplat) under active development on branch `gsplat`
+- **2026.02.06**: GS-2M accpeted to Eurographics 2026
+- **2025.09.15**: Initial code release
+
 ## Installation
 The code has been tested on Windows and Linux.
 
