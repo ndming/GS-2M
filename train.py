@@ -84,4 +84,15 @@ if __name__ == "__main__":
         print("[!] Disabling world space centering: normalize_world_space is enabled and takes precedence")
         cfg.center_world_space = False
 
+    # Check if depth regularization is properly configured
+    should_set_depth_render_mode = (
+        cfg.depth_point_lambda  > 0.0 or
+        cfg.depth_image_lambda  > 0.0 or
+        cfg.depth_normal_lambda > 0.0
+    )
+    if should_set_depth_render_mode:
+        assert cfg.depth_render_mode is not None, "Depth regularization is enabled but depth_render_mode is not set"
+    if cfg.depth_normal_lambda > 0.0:
+        assert cfg.depth_render_mode == "plane", "Depth normal consistency loss is only supported with plane depth"
+
     cli(main, cfg, verbose=True)

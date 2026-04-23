@@ -165,12 +165,14 @@ class Config:
     # LR for higher-order SH (detail)
     shN_lr: float = 2.5e-3 / 20
 
-    # Opacity regularization
+    # Opacity regularization, 0 to disable
     opacity_reg: float = 0.0
-    # Scale regularization
+    # Scale regularization, 0 to disable
     scale_reg: float = 0.0
-    # Alpha regularization
+    # Alpha regularization, 0 to disable
     alpha_reg: float = 0.0
+    # Enforce disk-like Gaussians, 0 to disable
+    planar_reg: float = 0.0
 
     # Enable camera optimization.
     pose_opt: bool = False
@@ -205,22 +207,19 @@ class Config:
     # Compute color-corrected metrics (cc_psnr, cc_ssim, cc_lpips) during evaluation
     use_color_correction_metric: bool = False
 
-    # Enable depth loss between rendered depths and depths from sparse SfM points (experimental)
-    depth_point_loss: bool = False
-    # Enable depth loss between rendered depths and GT depth images (experimental)
-    depth_image_loss: bool = False
-    # Start applying depth image loss from this step (only applies when depth_image_loss=True)
+    # How depths are rendered from Gaussians
+    depth_render_mode: Optional[Literal["z", "z_mean", "plane"]] = None
+    # Enable depth loss between rendered depths and depths from sparse SfM points (experimental), 0 to disable
+    depth_point_lambda: float = 0.0
+    # Start applying depth point loss from this step (only applies when depth_point_lambda > 0)
+    depth_point_loss_from_step: int = 5000
+    # Enable depth loss between rendered depths and GT depth images, 0 to disable 
+    depth_image_lambda: float = 0.0
+    # Start applying depth image loss from this step (only applies when depth_image_lambda > 0)
     depth_image_loss_from_step: int = 5000
     # The distance beyond which GT depth values are considered invalid
     depth_image_max_distance: float = 10.0
-    # Weight for depth loss
-    depth_lambda: float = 1e-2
-
-    # Mutli-view observation trimming
-    multi_view_observe_trim: bool = False
-    # Enforce disk-like Gaussians (planar loss), 0 to disable
-    planar_reg: float = 0.0
-    # Enforce depth normal consistency, 0 to disable
+    # Enforce depth normal consistency, requires depth_render_mode == plane, 0 to disable
     depth_normal_lambda: float = 0.0
     # Start applying depth normal consistency loss from this step (only applies when depth_normal_lambda > 0)
     depth_normal_loss_from_step: int = 7000
@@ -247,7 +246,8 @@ class Config:
             self.ppisp_controller_activation_num_steps * factor
         )
 
-        self.depth_image_loss_from_step = int(self.depth_image_loss_from_step * factor)
+        self.depth_point_loss_from_step  = int(self.depth_point_loss_from_step  * factor)
+        self.depth_image_loss_from_step  = int(self.depth_image_loss_from_step  * factor)
         self.depth_normal_loss_from_step = int(self.depth_normal_loss_from_step * factor)
 
         strategy = self.strategy
@@ -430,10 +430,14 @@ class Runner:
             self.parser,
             split="train",
             patch_size=cfg.patch_size,
-            load_point_depth=cfg.depth_point_loss,
-            load_image_depth=cfg.depth_image_loss,
+            load_point_depth=cfg.depth_point_lambda > 0.0,
+            load_image_depth=cfg.depth_image_lambda > 0.0,
         )
-        self.valset = Dataset(self.parser, split="val", load_image_depth=cfg.depth_image_loss)
+        self.valset = Dataset(
+            self.parser,
+            split="val",
+            load_image_depth=cfg.depth_image_lambda > 0.0,
+        )
         self.scene_scale = self.parser.scene_scale * 1.1 * cfg.global_scale
         print("[>] Scene half extent:", self.scene_scale)
 
@@ -684,9 +688,12 @@ class Runner:
         # Track if Gaussians are frozen (for controller distillation)
         self._gaussians_frozen = False
 
-        # Everything related to depth rendering or supervision will use plane depth from now on
-        with_plane_depth = cfg.depth_point_loss or cfg.depth_image_loss or cfg.depth_normal_lambda > 0.0
-        self.render_mode = "RGB+PD" if with_plane_depth else "RGB"
+        drm_to_rm = {
+            "z": "RGB+D",
+            "z_mean": "RGB+ED",
+            "plane": "RGB+PD",
+        }
+        self.render_mode = drm_to_rm[cfg.depth_render_mode] if cfg.depth_render_mode is not None else "RGB"
 
     def freeze_gaussians(self):
         """Freeze all Gaussian parameters for controller distillation.
@@ -912,12 +919,6 @@ class Runner:
                 data["exposure"].to(device) if "exposure" in data else None
             )  # [B,]
 
-            if cfg.depth_point_loss:
-                depth_pixels = data["depth_pixels"].to(device) # [1, M, 2]
-                depth_values = data["depth_values"].to(device) # [1, M]
-            if cfg.depth_image_loss:
-                depth_image = data["depth_image"].to(device) # [1, H, W, 1]
-
             height, width = gt_image.shape[1:3]
 
             if cfg.pose_noise:
@@ -967,8 +968,14 @@ class Runner:
             Lssim = 1.0 - fused_ssim(colors.permute(0, 3, 1, 2), gt_image.permute(0, 3, 1, 2), padding="valid")
             loss = Ll1 * (1.0 - cfg.ssim_lambda) + Lssim * cfg.ssim_lambda
 
+            # Depth losses
+            depth_loss = 0.0
+
             # Supervise rendered depths with prior depth points
-            if cfg.depth_point_loss:
+            if cfg.depth_point_lambda > 0.0 and step >= cfg.depth_point_loss_from_step:
+                depth_pixels = data["depth_pixels"].to(device) # [1, M, 2]
+                depth_values = data["depth_values"].to(device) # [1, M]
+
                 # Prepare depth pixels for grid sampling into rendered depth map
                 depth_pixels = torch.stack(
                     [
@@ -984,18 +991,21 @@ class Runner:
                 disp = torch.where(depths > 0.0, 1.0 / depths, torch.zeros_like(depths))
                 disp_gt = 1.0 / depth_values  # [1, M]
 
-                depth_loss = F.l1_loss(disp, disp_gt) * self.scene_scale
-                loss += depth_loss * cfg.depth_lambda
+                depth_point_loss = F.l1_loss(disp, disp_gt) * self.scene_scale
+                depth_loss += depth_point_loss.item()
+                loss += cfg.depth_point_lambda * depth_point_loss
 
             # Supervise rendered depths with prior depth images, assumming both have the same scale
-            if cfg.depth_image_loss and step >= cfg.depth_image_loss_from_step:
+            if cfg.depth_image_lambda > 0.0 and step >= cfg.depth_image_loss_from_step:
+                depth_image = data["depth_image"].to(device) # [1, H, W, 1]
                 depth_valid_mask = (depth_image > 0) & (depth_image < cfg.depth_image_max_distance) & (depths > 0)
                 if depth_valid_mask.any():
-                    depth_loss = F.l1_loss(depths[depth_valid_mask], depth_image[depth_valid_mask])
-                    loss += depth_loss * cfg.depth_lambda
+                    depth_image_loss = F.l1_loss(depths[depth_valid_mask], depth_image[depth_valid_mask])
+                    depth_loss += depth_image_loss.item()
+                    loss += cfg.depth_image_lambda * depth_image_loss
 
             # Depth-normal consistency
-            if cfg.depth_normal_lambda > 0.0 and "P" in self.render_mode and step >= cfg.depth_normal_loss_from_step:
+            if cfg.depth_normal_lambda > 0.0 and step >= cfg.depth_normal_loss_from_step:
                 weights = (1.0 - image_grad_weight(gt_image)).clamp(0, 1).detach() ** 2  # [..., H, W, 1]
                 weights = weights.unsqueeze(-4)            # [..., 1, H, W, 1]
                 render_normals = info["render_normals_c"]  # [..., C, H, W, 3]
@@ -1008,8 +1018,11 @@ class Runner:
                 weights = weights * valid_mask
 
                 diff = (render_normals - depth_normals).abs().sum(dim=-1, keepdim=True)  # [..., C, H, W, 1]
-                loss += cfg.depth_normal_lambda * ((weights * diff).sum() / (weights.sum() + 1e-6))
-            
+                depth_normal_loss = ((weights * diff).sum() / (weights.sum() + 1e-6))
+                depth_loss += depth_normal_loss.item()
+                loss += cfg.depth_normal_lambda * depth_normal_loss
+
+            # Post-processing losses
             if cfg.post_processing == "bilateral_grid":
                 post_processing_reg_loss = 10 * total_variation_loss(
                     self.post_processing_module.grids
@@ -1042,13 +1055,15 @@ class Runner:
 
             loss.backward()
 
-            # Update progress bar with postfix loss
+            # Update progress bar with postfix losses
             if world_rank == 0 and step % 100 == 0:
-                postfix_dict = { "SH": f"{sh_degree_to_use}", "Loss": f"{loss.item():.5f}" }
+                postfix_dict = { 
+                    "SH": f"{sh_degree_to_use}",
+                    "Loss": f"{loss.item():.5f}",
+                    "Depth": f"{depth_loss:.5f}"
+                }
                 n_points = len(self.splats["means"])
                 postfix_dict["Points"] = f"{n_points}"
-                if cfg.depth_point_loss or (cfg.depth_image_loss and step >= cfg.depth_image_loss_from_step):
-                    postfix_dict["Depth"] = f"{depth_loss.item():.5f}"
                 if cfg.pose_opt and cfg.pose_noise:
                     pose_err = F.l1_loss(camtoworlds_gt, camtoworlds)
                     postfix_dict["Pose"] = f"{pose_err.item():.5f}"
@@ -1057,13 +1072,12 @@ class Runner:
             # Update tensorboard scalar values
             if world_rank == 0 and cfg.tb_every > 0 and step % cfg.tb_every == 0:
                 mem = torch.cuda.max_memory_allocated() / 1024**3
-                self.writer.add_scalar("train/loss", loss.item(), step)
-                self.writer.add_scalar("train/l1loss", Ll1.item(), step)
-                self.writer.add_scalar("train/ssimloss", Lssim.item(), step)
+                self.writer.add_scalar("train/Loss", loss.item(), step)
+                self.writer.add_scalar("train/Ll1", Ll1.item(), step)
+                self.writer.add_scalar("train/Lssim", Lssim.item(), step)
                 self.writer.add_scalar("train/num_GS", len(self.splats["means"]), step)
                 self.writer.add_scalar("train/mem", mem, step)
-                if cfg.depth_point_loss or (cfg.depth_image_loss and step >= cfg.depth_image_loss_from_step):
-                    self.writer.add_scalar("train/depthloss", depth_loss.item(), step)
+                self.writer.add_scalar("train/Ldepth", depth_loss, step)
                 if cfg.post_processing is not None:
                     self.writer.add_scalar(
                         "train/post_processing_reg_loss",
@@ -1292,6 +1306,7 @@ class Runner:
                 # Save renders to tensorboard
                 if not cfg.tb_save_image:
                     continue
+
                 stem = self.parser.image_names[self.valset.indices[data["image_id"]]].rsplit(".", 1)[0]
                 gt_image = torch.clamp(pixels, 0.0, 1.0).permute(0, 3, 1, 2) # [1, 3, H, W]
                 color_render = colors.permute(0, 3, 1, 2)  # [1, 3, H, W]
@@ -1315,7 +1330,7 @@ class Runner:
                     depth_render = depths.permute(0, 3, 1, 2)  # [1, 1, H, W]
                     self.writer.add_images(f"{stage}_{stem}/depth", depth_render, global_step=step + 1)
 
-                if cfg.depth_image_loss:
+                if cfg.depth_image_lambda > 0.0:
                     depth_image = rescale_depth(data["depth_image"])  # [1, H, W, 1]
                     depth_image = depth_image.permute(0, 3, 1, 2)     # [1, 1, H, W]
                     self.writer.add_images(f"{stage}_{stem}/gt_depth", depth_image, global_step=step + 1)

@@ -295,12 +295,12 @@ class Parser:
         # camera_ids = list(Ks_dict.keys())
         print(f"[>] Parser: {len(kf_stamps)} images, taken by {len(Ks_dict)} camera")
 
-        dso_image_dir = Path(data_dir) / "dso" / "rgb"
-        dso_depth_dir = Path(data_dir) / "ffs"
+        image_dir = Path(data_dir) / "mav0" / "rgb" / "data"
+        depth_dir = Path(data_dir) / "ffs"
         
         # These two arrays match 1-to-1 (image and pose)
         c2w_mats = np.stack(kf_poses, axis=0)
-        image_names = _read_image_names(dso_image_dir, kf_stamps)
+        image_names = _read_image_names(image_dir, kf_stamps)
         camera_ids = [0] * len(image_names) # only use one camera at the moment
 
         # Preprocess input images and depths
@@ -308,11 +308,11 @@ class Parser:
         processed_depth_dir = Path(data_dir) / f"processed_depths_{factor}"
         
         image_paths = process_input_images(
-            str(dso_image_dir), str(processed_image_dir), image_names, factor, reuse=reuse_processed_images,
+            str(image_dir), str(processed_image_dir), image_names, factor, reuse=reuse_processed_images,
             mask_image=mask_gt_image
         )
         depth_paths = process_input_depths(
-            str(dso_depth_dir), str(processed_depth_dir), image_names, factor, reuse=reuse_processed_images,
+            str(depth_dir), str(processed_depth_dir), image_names, factor, reuse=reuse_processed_images,
         )
         
         pcd_dir = Path(data_dir) / "output" / "clouds"
