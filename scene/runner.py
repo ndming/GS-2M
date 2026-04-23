@@ -41,7 +41,10 @@ from fused_ssim import fused_ssim
 
 from .datasets import Dataset, get_parser
 from .datasets.traj import generate_ellipse_path_z, generate_interpolated_path, generate_spiral_path
-from .utils import AppearanceOptModule, CameraOptModule, knn, rgb_to_sh, set_random_seed, fix_normal_coordinates
+from .utils import (
+    AppearanceOptModule, CameraOptModule, knn, rgb_to_sh, set_random_seed,
+    fix_normal_coordinates, image_grad_weight
+)
 
 
 @dataclass
@@ -82,7 +85,7 @@ class Config:
     # Mask GT RGB image during training for object-centric reconstruction
     mask_gt_image: bool = False
     # If set, don't perfrom pre-processing of GT RGB images and use the existing ones
-    reuse_processed_images: bool = False
+    reuse_processed_images: bool = True
     # How many frames at the start to skip when loading certain datasets
     num_offset_frames: int = 0
     # Load frames at this interval for certain datasets
@@ -99,13 +102,13 @@ class Config:
     # Number of training steps
     max_steps: int = 30_000
     # Steps to evaluate the model
-    eval_steps: List[int] = field(default_factory=lambda: [7_000, 20_000, 30_000])
+    eval_steps: List[int] = field(default_factory=lambda: [7_000, 15_000, 25_000, 30_000])
     # Steps to save the model
-    save_steps: List[int] = field(default_factory=lambda: [7_000, 20_000, 30_000])
+    save_steps: List[int] = field(default_factory=lambda: [7_000, 15_000, 25_000, 30_000])
     # Whether to save ply file (storage size can be large)
     save_ply: bool = False
     # Steps to save the model as ply
-    ply_steps: List[int] = field(default_factory=lambda: [7_000, 20_000, 30_000])
+    ply_steps: List[int] = field(default_factory=lambda: [7_000, 15_000, 25_000, 30_000])
     # Whether to disable video generation during training and evaluation
     disable_video: bool = False
 
@@ -959,12 +962,12 @@ class Runner:
                 info=info,
             )
 
-            # loss
+            # Phtometric loss
             Ll1 = F.l1_loss(colors, gt_image)
             Lssim = 1.0 - fused_ssim(colors.permute(0, 3, 1, 2), gt_image.permute(0, 3, 1, 2), padding="valid")
             loss = Ll1 * (1.0 - cfg.ssim_lambda) + Lssim * cfg.ssim_lambda
 
-            # Supervise sampled depths from rendered depths with prior depth points
+            # Supervise rendered depths with prior depth points
             if cfg.depth_point_loss:
                 # Prepare depth pixels for grid sampling into rendered depth map
                 depth_pixels = torch.stack(
@@ -993,38 +996,7 @@ class Runner:
 
             # Depth-normal consistency
             if cfg.depth_normal_lambda > 0.0 and "P" in self.render_mode and step >= cfg.depth_normal_loss_from_step:
-                def _get_img_grad_weight(gt_rgb):
-                    # gt_image: [..., H, W, 3]
-                    *batch_dims, H, W, C = gt_rgb.shape
-                    assert C == 3
-
-                    # Move channels to NCHW
-                    gt_img = gt_rgb.permute(*range(len(batch_dims)), -1, -3, -2)  # [..., 3, H, W]
-
-                    # Gradients
-                    bottom = gt_img[..., :, 2:H,   1:W-1]
-                    top    = gt_img[..., :, 0:H-2, 1:W-1]
-                    right  = gt_img[..., :, 1:H-1, 2:W]
-                    left   = gt_img[..., :, 1:H-1, 0:W-2]
-
-                    grad_x = torch.mean(torch.abs(right - left), dim=-3, keepdim=True)  # avg over channel
-                    grad_y = torch.mean(torch.abs(top - bottom), dim=-3, keepdim=True)
-
-                    grad = torch.cat((grad_x, grad_y), dim=-3)  # [..., 2, H-2, W-2]
-                    grad, _ = torch.max(grad, dim=-3)           # [..., H-2, W-2]
-
-                    grad_flat = grad.view(*batch_dims, -1)
-                    gmin = grad_flat.min(dim=-1, keepdim=True).values
-                    gmax = grad_flat.max(dim=-1, keepdim=True).values
-                    grad = (grad - gmin[..., None]) / (gmax[..., None] - gmin[..., None] + 1e-6)
-
-                    # Pad back to H, W and add channel dim
-                    grad = torch.nn.functional.pad(grad, (1, 1, 1, 1))  # [..., H, W]
-                    grad = grad.unsqueeze(-1)  # [..., H, W, 1]
-                
-                    return grad
-
-                weights = (1.0 - _get_img_grad_weight(gt_image)).clamp(0, 1).detach() ** 2  # [..., H, W, 1]
+                weights = (1.0 - image_grad_weight(gt_image)).clamp(0, 1).detach() ** 2  # [..., H, W, 1]
                 weights = weights.unsqueeze(-4)            # [..., 1, H, W, 1]
                 render_normals = info["render_normals_c"]  # [..., C, H, W, 3]
                 depth_normals  = info["depth_normals"]     # [..., C, H, W, 3]
@@ -1049,7 +1021,7 @@ class Runner:
                 )
                 loss += post_processing_reg_loss
 
-            # regularizations
+            # Regularizations
             if cfg.opacity_reg > 0.0:
                 loss += cfg.opacity_reg * torch.sigmoid(self.splats["opacities"]).mean()
             if cfg.scale_reg > 0.0:

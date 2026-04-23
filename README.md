@@ -6,6 +6,14 @@
 
 ![cover](media/cover.png)
 
+## Updates
+- **2026.05.12**: Migrated training engine to [gsplat](https://github.com/nerfstudio-project/gsplat)
+- **2026.04.08**: Added COLMAP `4.0` conversion script with the ability to sample frames from videos
+- **2026.03.23**: Added USDZ export script to pack trained Gaussians and the extracted mesh into a `.usdz` scene
+- **2026.03.08**: Added foreground masking instructions for high-quality object-centric reconstructions
+- **2026.02.06**: GS-2M accpeted to Eurographics 2026
+- **2025.09.15**: Initial code release
+
 ## Installation
 Please make sure you have a working C++ compiler compatible with your preferred CUDA Toolkit version. This usually means using
 the default GCC on Linux or installing the correct version of [Visual Studio](https://learn.microsoft.com/en-us/visualstudio/releases/2022/release-history) on Windows.
@@ -13,15 +21,15 @@ the default GCC on Linux or installing the correct version of [Visual Studio](ht
 <details>
 <summary><span style="font-weight: bold;">Compatibility matrix between MSVC and CUDA for Windows installation</span></summary>
 
-| **MSVC** | **CUDA Toolkit** |
-|----------|----------|
-| `19.44` (VS `17.14`) | Minimum `12.4` |
-| `19.43` (VS `17.13`) | Minimum `12.4` |
-| `19.42` (VS `17.12`) | Minimum `12.4` |
-| `19.41` (VS `17.11`) | Minimum `12.4` |
-| `19.40` (VS `17.10`) | Minimum `11.6` |
-| `19.39` (VS `17.9`)  | Minimum `11.6` |
-| `19.38` (VS `17.8`)  | Minimum `11.6` |
+| **MSVC** | **Visual Studio** | **Minimum CUDA** |
+|----------|-------------------|------------------|
+| `19.44` | `17.14` | `12.4` |
+| `19.43` | `17.13` | `12.4` |
+| `19.42` | `17.12` | `12.4` |
+| `19.41` | `17.11` | `12.4` |
+| `19.40` | `17.10` | `11.6` |
+| `19.39` | `17.9`  | `11.6` |
+| `19.38` | `17.8`  | `11.6` |
 
 </details>
 
@@ -137,7 +145,7 @@ scene/
 <details>
 <summary><span style="font-weight: bold;">Masking for object-centric reconstruction</span></summary>
 
-To reconstruct geometrically corrected objects from scenes with overwhelimg background, consider following these steps
+To reconstruct geometrically corrected objects from scenes with overwhelming background, consider following these steps
 to extract foreground masks of the target object. We will be using the amazing model [BiRefNet](https://github.com/ZhengPeng7/BiRefNet?tab=readme-ov-file) from [this paper](https://arxiv.org/pdf/2401.03407).
 
 Clone the BiRefNet repo to the `scripts` directory (the location is crucial):
@@ -337,6 +345,7 @@ output/tnt/<scene>/train/ours_wo-brdf_30000/mesh/evaluation/
 This repository and the entire project are based on previous Gaussian splatting works. We acknowledge and appreciate
 all the great research and publicly available code that made this possible.
 - Baseline and core structure: [3DGS](https://repo-sam.inria.fr/fungraph/3d-gaussian-splatting/)
+- Modular training engine: [gsplat](https://github.com/nerfstudio-project/gsplat)
 - High-quality surface reconstruction: [PGSR](https://zju3dv.github.io/pgsr/)
 - Improved densification: [AbsGS](https://ty424.github.io/AbsGS.github.io/)
 - Material decomposition: [GS-IR](https://lzhnb.github.io/project-pages/gs-ir.html) and [GS-ROR2](https://arxiv.org/abs/2406.18544)

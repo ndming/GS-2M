@@ -226,6 +226,38 @@ def apply_depth_colormap(
     return img
 
 
+def image_grad_weight(image):
+    # image: [..., H, W, 3]
+    *batch_dims, H, W, C = image.shape
+    assert C == 3
+
+    # Move channels to NCHW
+    img = image.permute(*range(len(batch_dims)), -1, -3, -2)  # [..., 3, H, W]
+
+    # Gradients
+    bottom = img[..., :, 2:H,   1:W-1]
+    top    = img[..., :, 0:H-2, 1:W-1]
+    right  = img[..., :, 1:H-1, 2:W]
+    left   = img[..., :, 1:H-1, 0:W-2]
+
+    grad_x = torch.mean(torch.abs(right - left), dim=-3, keepdim=True)  # avg over channel
+    grad_y = torch.mean(torch.abs(top - bottom), dim=-3, keepdim=True)
+
+    grad = torch.cat((grad_x, grad_y), dim=-3)  # [..., 2, H-2, W-2]
+    grad, _ = torch.max(grad, dim=-3)           # [..., H-2, W-2]
+
+    grad_flat = grad.view(*batch_dims, -1)
+    gmin = grad_flat.min(dim=-1, keepdim=True).values
+    gmax = grad_flat.max(dim=-1, keepdim=True).values
+    grad = (grad - gmin[..., None]) / (gmax[..., None] - gmin[..., None] + 1e-6)
+
+    # Pad back to H, W and add channel dim
+    grad = torch.nn.functional.pad(grad, (1, 1, 1, 1))  # [..., H, W]
+    grad = grad.unsqueeze(-1)  # [..., H, W, 1]
+  
+    return grad
+
+
 def fix_normal_coordinates(normal_map):
     # Flatten and normalize normals
     normals = normal_map.view(-1, 3).clone()  # [H * W, 3]
