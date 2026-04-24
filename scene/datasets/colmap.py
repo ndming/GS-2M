@@ -101,7 +101,7 @@ class Parser:
             imsize_dict[camera_id] = (cam.width // factor, cam.height // factor)
             mask_dict[camera_id] = None
         print(
-            f"[Parser] {len(imdata)} images, taken by {len(set(camera_ids))} cameras."
+            f"[>] COLMAP parser: {len(imdata)} images, taken by {len(set(camera_ids))} cameras"
         )
 
         if len(imdata) == 0:

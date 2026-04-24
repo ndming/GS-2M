@@ -75,6 +75,8 @@ class Args:
     decimate_target: int = 0
     # Render trajectory with the extracted mesh
     render_traj: bool = True
+    # Depth cutoff distance in trajectory rendering (render_traj) will be multiplied by this factor
+    depth_cutoff_factor: float = 1.0
 
 
 def main(args: Args, cfg: Config):
@@ -125,7 +127,13 @@ def main(args: Args, cfg: Config):
 
     # Render trajectory but with the rendered mesh instead of rendered alpha
     if args.render_traj:
-        runner.render_traj_with_mesh(mesh_file, mesh_dir / f"{args.extraction.get_name()}_traj_{ckpt_step + 1}.mp4")
+        video_file = mesh_dir / f"{args.extraction.get_name()}_traj_{ckpt_step + 1}.mp4"
+        runner.render_traj_with_mesh(
+            mesh_file=mesh_file,
+            video_file=video_file,
+            depth_cutoff_factor=args.depth_cutoff_factor
+        )
+        print(f"[>] Video saved to: {video_file}")
 
 
 if __name__ == "__main__":

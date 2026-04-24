@@ -637,8 +637,9 @@ class Runner:
                         ckpt_post_processing_state["exposure_params"].mean().item()
                     )
                     module.color_params.data.copy_(
-                        ckpt_post_processing_state["color_params"].mean(dim=0, keepdim=True)
-                        .expand_as(module.color_params)
+                        ckpt_post_processing_state["color_params"]
+                            .mean(dim=0, keepdim=True)
+                            .expand_as(module.color_params)
                     )
         
                     # Controller weights: load directly (shape doesn't depend on num_frames)
@@ -1060,7 +1061,7 @@ class Runner:
                 postfix_dict = { 
                     "SH": f"{sh_degree_to_use}",
                     "Loss": f"{loss.item():.5f}",
-                    "Depth": f"{depth_loss:.5f}"
+                    "Ldepth": f"{depth_loss:.5f}"
                 }
                 n_points = len(self.splats["means"])
                 postfix_dict["Points"] = f"{n_points}"
@@ -1220,11 +1221,22 @@ class Runner:
 
             # eval the full set
             if step in [i + self.ckpt_step for i in cfg.eval_steps]:
-                self.eval(step, stage="train" if cfg.test_every <= 0 else "val")
-                self.render_traj(step)
+                eval_stage = "train" if cfg.test_every <= 0 else "val"
+                tqdm.write(f"--- Running evaluation ({eval_stage})...")
+                self.eval(step, stage=eval_stage)
+                if not self.cfg.disable_video:
+                    # Save all frames to video
+                    video_dir = f"{cfg.result_dir}/videos"
+                    os.makedirs(video_dir, exist_ok=True)
+
+                    tqdm.write("--- Rendering trajectory...")
+                    video_file = video_dir / f"traj_{step + 1}.mp4"
+                    self.render_traj(video_file)
+                    tqdm.write(f"--- Video saved to: {video_file}")
 
             # run compression
             if cfg.compression is not None and step in [i + self.ckpt_step for i in cfg.eval_steps]:
+                tqdm.write("--- Running compression...")
                 self.run_compression(step)
 
             if not cfg.disable_viewer:
@@ -1243,7 +1255,6 @@ class Runner:
     @torch.no_grad()
     def eval(self, step: int, stage: str = "val"):
         """Entry for evaluation."""
-        tqdm.write(f"--- Running evaluation ({stage})...")
         cfg = self.cfg
         device = self.device
         world_rank = self.world_rank
@@ -1377,11 +1388,8 @@ class Runner:
             self.writer.flush()
 
     @torch.no_grad()
-    def render_traj(self, step: int):
+    def render_traj(self, video_file: Path, depth_cutoff_factor=1.0):
         """Entry for trajectory rendering."""
-        if self.cfg.disable_video:
-            return
-        tqdm.write("--- Rendering trajectory...")
         cfg = self.cfg
         device = self.device
 
@@ -1420,10 +1428,7 @@ class Runner:
         K = torch.from_numpy(list(self.parser.Ks_dict.values())[0]).float().to(device)
         width, height = list(self.parser.imsize_dict.values())[0]
 
-        # Save all frames to video
-        video_dir = f"{cfg.result_dir}/videos"
-        os.makedirs(video_dir, exist_ok=True)
-        writer = imageio.get_writer(f"{video_dir}/traj_{step + 1}.mp4", fps=30)
+        writer = imageio.get_writer(str(video_file), fps=30)
         for i in range(len(camtoworlds_all)): # desc="Rendering trajectory"
             camtoworlds = camtoworlds_all[i : i + 1]
             Ks = K[None]
@@ -1440,7 +1445,7 @@ class Runner:
             )  # [1, H, W, 4]
             colors = torch.clamp(renders[..., 0:3], 0.0, 1.0)  # [1, H, W, 3]
             
-            cutoff = self.scene_scale * 1.5
+            cutoff = self.scene_scale * depth_cutoff_factor
             depths = renders[..., 3:4]  # [1, H, W, 1]
             depths = (depths - cfg.near_plane) / (cutoff - cfg.near_plane)
             depths = torch.clamp(depths, 0.0, 1.0)
@@ -1474,10 +1479,9 @@ class Runner:
 
             writer.append_data(canvas)
         writer.close()
-        tqdm.write(f"--- Video saved to {video_dir}/traj_{step + 1}.mp4")
 
     @torch.no_grad()
-    def render_traj_with_mesh(self, mesh_file: Path, video_file: Path):
+    def render_traj_with_mesh(self, mesh_file: Path, video_file: Path, depth_cutoff_factor=1.0):
         if sys.platform != "win32":
             os.environ["PYOPENGL_PLATFORM"] = "egl"
         import pyrender
@@ -1527,7 +1531,7 @@ class Runner:
             tm,
             smooth=False, # flat shading — every face normal is used as-is
             material=pyrender.MetallicRoughnessMaterial(
-                baseColorFactor=[0.6, 0.6, 0.6, 1.0],  # neutral mid-gray
+                baseColorFactor=[0.5, 0.5, 0.5, 1.0],  # neutral mid-gray
                 metallicFactor=0.0,                    # fully diffuse, zero metallic
                 roughnessFactor=1.0,                   # maximum roughness = lambertian
             ),
@@ -1541,7 +1545,7 @@ class Runner:
         scene = pyrender.Scene(bg_color=[0., 0., 0., 0.], ambient_light=[0.15, 0.15, 0.15])
         scene.add(py_mesh)
         camera_node = scene.add(py_camera, pose=np.eye(4))
-        headlight = pyrender.DirectionalLight(color=np.ones(3), intensity=2.0)
+        headlight = pyrender.DirectionalLight(color=np.ones(3), intensity=1.5)
         scene.add(headlight, parent_node=camera_node)
         renderer = pyrender.OffscreenRenderer(viewport_width=width, viewport_height=height)
         FLIP_YZ = np.diag([1., -1., -1., 1.])
@@ -1564,7 +1568,7 @@ class Runner:
             )  # [1, H, W, 4]
             colors = torch.clamp(renders[..., 0:3], 0.0, 1.0)  # [1, H, W, 3]
             
-            cutoff = self.scene_scale * 1.5
+            cutoff = self.scene_scale * depth_cutoff_factor
             depths = renders[..., 3:4]  # [1, H, W, 1]
             depths = (depths - cfg.near_plane) / (cutoff - cfg.near_plane)
             depths = torch.clamp(depths, 0.0, 1.0)
@@ -1608,7 +1612,6 @@ class Runner:
 
         renderer.delete()
         writer.close()
-        print(f"[>] Video saved to: {video_file}")
 
     @torch.no_grad()
     def export_ppisp_reports(self) -> None:
@@ -1969,7 +1972,6 @@ class Runner:
     @torch.no_grad()
     def run_compression(self, step: int):
         """Entry for running compression."""
-        print("--- Running compression...")
         world_rank = self.world_rank
 
         compress_dir = f"{self.cfg.result_dir}/compression/rank{world_rank}"
