@@ -1,3 +1,4 @@
+import pathlib
 import time
 import tyro
 
@@ -95,4 +96,5 @@ if __name__ == "__main__":
     if cfg.depth_normal_lambda > 0.0:
         assert cfg.depth_render_mode == "plane", "Depth normal consistency loss is only supported with plane depth"
 
+    assert pathlib.Path(cfg.data_dir).exists(), f"Could NOT find data directory {cfg.data_dir}"
     cli(main, cfg, verbose=True)

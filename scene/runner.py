@@ -60,8 +60,8 @@ class Config:
     # If render_traj_path is interp, the output traj will have traj_num_interps * (n_poses - 1)
     traj_num_interps: int = 1
 
-    # Path to the Mip-NeRF 360 dataset
-    data_dir: str = "data/360_v2/garden"
+    # Path to a scene directory
+    data_dir: str = "data/scene"
     # Downsample factor for the dataset
     data_factor: int = 1
     # Directory to save results
@@ -84,7 +84,7 @@ class Config:
     load_exposure: bool = True
     # Mask GT RGB image during training for object-centric reconstruction
     mask_gt_image: bool = False
-    # If set, don't perfrom pre-processing of GT RGB images and use the existing ones
+    # If set, skip pre-processing of GT RGB images and use the existing ones (if available)
     reuse_processed_images: bool = True
     # How many frames at the start to skip when loading certain datasets
     num_offset_frames: int = 0
@@ -1037,11 +1037,14 @@ class Runner:
 
             # Regularizations
             if cfg.opacity_reg > 0.0:
-                loss += cfg.opacity_reg * torch.sigmoid(self.splats["opacities"]).mean()
+                opacity_loss = torch.sigmoid(self.splats["opacities"]).mean()
+                loss += cfg.opacity_reg * opacity_loss
             if cfg.scale_reg > 0.0:
-                loss += cfg.scale_reg * torch.exp(self.splats["scales"]).mean()
+                scale_loss = torch.exp(self.splats["scales"]).mean()
+                loss += cfg.scale_reg * scale_loss
             if cfg.alpha_reg > 0.0:
-                loss += cfg.alpha_reg * F.binary_cross_entropy(alphas, gt_alpha)
+                alpha_loss = F.binary_cross_entropy(alphas, gt_alpha)
+                loss += cfg.alpha_reg * alpha_loss
             if cfg.planar_reg > 0.0:
                 radii = info["radii"]                    # [..., C, N, 2]
                 valid_per_cam = (radii > 0).any(dim=-1)  # [..., C, N]
@@ -1051,8 +1054,9 @@ class Runner:
                     scales = scales[visibility_filter]
 
                     sorted_scale, _ = torch.sort(scales, dim=-1)
-                    min_scale_loss = sorted_scale[..., 0]
-                    loss += cfg.planar_reg * min_scale_loss.mean()
+                    min_axes = sorted_scale[..., 0]
+                    planar_loss = min_axes.mean()
+                    loss += cfg.planar_reg * planar_loss
 
             loss.backward()
 
@@ -1226,7 +1230,7 @@ class Runner:
                 self.eval(step, stage=eval_stage)
                 if not self.cfg.disable_video:
                     # Save all frames to video
-                    video_dir = f"{cfg.result_dir}/videos"
+                    video_dir = Path(cfg.result_dir) / "videos"
                     os.makedirs(video_dir, exist_ok=True)
 
                     tqdm.write("--- Rendering trajectory...")
