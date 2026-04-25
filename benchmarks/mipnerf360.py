@@ -24,7 +24,7 @@ def run(base_dir, out_dir, strategy, postfix):
         result_dir = out_dir / out_dir_name
 
         opt = f"--data-factor {factor} --save-steps {MAX_STEPS} --save-ply --eval-steps {MAX_STEPS} --test-every 8"
-        etc = f"--disable-viewer --disable-video"
+        etc = f"--disable-viewer --disable-video --normalize-world-space"
         if strategy == "mcmc":
             opt = f"{opt} --scale-reg 0.01 --opacity-reg 0.01 --init-opa 0.5 --init-scale 0.1"
 

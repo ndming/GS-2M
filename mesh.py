@@ -16,9 +16,9 @@ from scene.utils import post_process_mesh, write_mesh
 
 @dataclass
 class TsdfSingleExtraction:
-    # Depth samples beyond this distance (meters) are ignored during TSDF fusion, default to scene radius if not provided
+    # Depth samples beyond this distance (meters) are ignored during TSDF fusion, default to scene radius if < 0
     max_depth: float = -1
-    # Side length of each voxel (meters) in the TSDF grid, default to max_depth / 512 if not provided
+    # Side length of each voxel (meters) in the TSDF grid, default to max_depth / 512 if < 0
     voxel_size: float = -1
     # The SDF truncation distance is computed from this parameter as voxel_size * sdf_trunc_factor
     sdf_trunc_factor: float = 4.0
@@ -34,9 +34,9 @@ class TsdfSingleExtraction:
 
 @dataclass
 class TsdfMultiExtraction:
-    # Depth samples beyond this distance (meters) are ignored during TSDF fusion, default to scene radius if not provided
+    # Depth samples beyond this distance (meters) are ignored during TSDF fusion, default to scene radius if < 0
     max_depth: float = -1
-    # Side length (meters) of each foreground voxel in the TSDF grid, default to max_depth / 512 if not provided
+    # Side length (meters) of each foreground voxel in the TSDF grid, default to max_depth / 512 if < 0
     base_voxel_size: float = -1
     # How many levels to fuse depths in multi-resolution TSDF grid, where each level double the voxel size from the previous, 
     # default to as many levels as possible until voxel size > max_depth / 16. The number of levels is capped to 4.
@@ -143,7 +143,7 @@ if __name__ == "__main__":
             Args(extraction=TsdfSingleExtraction()),
         ),
         TsdfMultiExtraction().get_name(): (
-            "Extract mesh using multi-level TSDF fusion of rendered depths",
+            "Extract mesh using multi-level TSDF fusion of rendered depths (experimental)",
             Args(extraction=TsdfMultiExtraction()),
         ),
     }

@@ -6,8 +6,10 @@
 
 ![cover](media/cover.png)
 
+🚧 Migration to [gsplat](https://github.com/nerfstudio-project/gsplat) is not fully implemented,
+expect breaking changes and incomplete features.
+
 ## Updates
-- **2026.05.12**: Migrated training engine to [gsplat](https://github.com/nerfstudio-project/gsplat)
 - **2026.04.08**: Added COLMAP `4.0` conversion script with the ability to sample frames from videos
 - **2026.03.23**: Added USDZ export script to pack trained Gaussians and the extracted mesh into a `.usdz` scene
 - **2026.03.08**: Added foreground masking instructions for high-quality object-centric reconstructions
@@ -172,55 +174,45 @@ $env:PYTHONPATH="scripts\birefnet"; python scripts/masking.py -i </path/to/scene
 
 ### Training
 ```bash
-python train.py -s /path/to/scene -m /path/to/model/directory
+python train.py default --data-dir <path/to/scene> --result-dir output/scene
 ```
 
-<details>
-<summary><span style="font-weight: bold;">Additional settings to change the behavior of train.py</span></summary>
+Please tune the extraction parameters of `train.py`. You can inspect them by using the `-h` flag:
+```
+python train.py -h
+python train.py default -h
+```
 
-- `--material`: enable material decomposition as part of training, default to `False`.
-- `--reflection_threshold`: control how sensitive multi-view photometric variations are to the detection of smooth surfaces.
-We suggest setting to `1.0` or greater for diffuse surfaces, and less than `1.0` for reflective surfaces.
-- `--lambda_smooth`: if there are not enough reflection clues, increase this parameter to propagate correctly identified roughness.
-- `--lambda_normal`: if the reconstructed mesh is not water-tight, increase this parameter to fill the gaps.
-- `-r`: downscale input images, recommended for high resolution training data (more than 1k6 pixels width/height).
-For example, `-r 2` will train with images at half the resolution of the original.
-- `--masks`: the name of the directory containing masks of the foreground object. For the directory structure shown above,
-the option shall be specified as `--masks masks`. Note that, by default, the code will pick up the alpha channel of the
-GT images for foreground masks if they are RGBA. However, training will prioritize `--masks` over alpha channel if
-they co-exist.
-- `--mask_gt`: even with `--masks` or the alpha channel from input images, training would still perform with unmasked RGB
-as GT. To mask them out and fit Gaussians to the foreground object only, add this option. This is especially useful for
-reconstructing objects from scenes with overwhelming background details.
-
-</details>
 
 ### Mesh extraction
 ```bash
-python render.py -m /path/to/model/directory --extract_mesh --skip_test
+python mesh.py tsdf_single --cfg-file output/scene/cfg.yml
 ```
 
-The `.ply` file of the extracted triangle mesh should be found under:
+The `.ply` file of the extracted triangle mesh can be found at:
 ```
-/path/to/model/directory/train/ours_30000/mesh/tsdf_post.ply
+output/scene/mesh/tsdf_single_step*.ply
 ```
 
-<details>
-<summary><span style="font-weight: bold;">Important parameters for render.py</span></summary>
-
-- `--max_depth`: the maximum distance beyond which points will be discarded during depth fusion. This can be estimated
-from the scene's half extent value reported during training/rendering.
-- `--voxel_size`: how dense the sampling grid should be for TSDF fusion.
-- `--sdf_trunc`: smaller values yield sharper surfaces but increase sensitivity to depth noise, while larger values
-improve robustness to noise but blur fine details.
-- `--num_clusters`: how many clusters to keep for mesh post-processing, default to 1 (extract a single object).
-
-</details>
+Please tune the extraction parameters of `mesh.py` depending on the nature of your scene:
+```
+python mesh.py -h
+python mesh.py tsdf_single -h
+```
 
 ### Export trained Gaussians and the extracted mesh to a USDZ scene
+With demand for robotic simulation on the rise, we provide an export script that packs trained Gaussians and
+the extracted mesh into a single `.usdz` file that can be imported to, for example, IsaacSim `5.1`.
+
+After the extraction step, the Gaussians and mesh are collocated in the same coordinate space, allowing a simulated
+robot sensor to pick up high-quality novel views while the robot itself physically interacts within the scene.
 ```bash
-python scripts/export/usd.py -i <path/to>/point_cloud_30000.ply -m <path/to>/mesh.ply [-o <path/to>/scene.usdz --collision --invisible]
+python scripts/export/usd.py --input_ply output/scene/ply/point_cloud_30000.ply \
+                             --mesh_ply output/scene/mesh/tsdf_single_step29999.ply \
+                             --collision [-o <path/to>/scene.usdz --invisible]
 ```
+
+We appreciate the amazing [3DGRUT repo](https://github.com/nv-tlabs/3dgrut), from which this export script was based on.
 
 ## Evaluation
 Please follow these steps to reproduce the evaluation results.
@@ -255,16 +247,11 @@ dtu/Official_DTU_Dataset/
 ```
 - Run the following script:
 ```bash
-# You may need to adjust `data_base_path` in `run_dtu.py` to point to your `dtu/`
-python scripts/run_dtu.py
+python benchmarks/dtu.py --data_base_dir <path/to/dtu>
 ```
-- Get reconstruction results for `ours_wo-brdf`:
-```shell
-python scripts/report_dtu.py --method ours_wo-brdf_30000
-```
-- Get reconstruction results for `ours`:
-```shell
-python scripts/report_dtu.py --method ours_30000
+- The reconstruction statistics can be found at:
+```bash
+output/dtu/stats.json
 ```
 
 ### Material decomposition on the Shiny Blender Synthetic dataset
@@ -339,6 +326,26 @@ python scripts/run_tnt.py
 - Check the reconstruction results under:
 ```
 output/tnt/<scene>/train/ours_wo-brdf_30000/mesh/evaluation/
+```
+
+### Novel-view synthesis on the MipNeRF 360 dataset
+- Download all [MipNeRF 360 scenes](https://jonbarron.info/mipnerf360/) and organize the dataset as follows:
+```
+mipnerf360/
+├── bicycle/
+│   ├── sparse/
+│   ├── images/
+│   ├── poses_bounds.npy
+├── bonsai/
+└── ...
+```
+- Run the following script:
+```bash
+python benchmarks/mipnerf360.py --data_base_dir <path/to/mipnerf360>
+```
+- The reconstruction statistics can be found at:
+```bash
+output/mipnerf360/stats.json
 ```
 
 ## Acknowledgements

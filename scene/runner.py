@@ -65,7 +65,7 @@ class Config:
     # Downsample factor for the dataset
     data_factor: int = 1
     # Directory to save results
-    result_dir: str = "results/garden"
+    result_dir: str = "results"
     # Every N images there is a test image, 0 (default) will use all images for training
     test_every: int = 0
     # Random crop size for training  (experimental)
@@ -73,7 +73,7 @@ class Config:
     # A global scaler that applies to the scene size related parameters
     global_scale: float = 1.0
     # Normalize the world space
-    normalize_world_space: bool = True
+    normalize_world_space: bool = False
     # Center the world space, preserving scales and orientation, disabled if normalize_world_space is True
     center_world_space: bool = False
     # Preserve camera z coordinates for center_world_space, only applies if center_world_space is True
