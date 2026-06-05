@@ -5,7 +5,7 @@ import yaml
 
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
-from typing import Union
+from typing import Union, List
 from typing_extensions import assert_never
 
 import numpy as np
@@ -69,10 +69,14 @@ class Args:
     extraction: Union[TsdfSingleExtraction, TsdfMultiExtraction] = field(default_factory=TsdfSingleExtraction)
     # How many clusters to keep during post-processing, 0 to keep all
     num_clusters: int = 0
+    # List of 1-based ranks to exclude during post-processing, None to keep all
+    skip_clusters: List[int] = None
     # Clusters with triangle count smaller than this number will be removed, 0 to keep all
     min_triangles: int = 0
     # Reduce the number of triangle count to be at most this decimation target, 0 to keep all 
     decimate_target: int = 0
+    # Whether to save the extracted mesh in .glb format (instead of .ply)
+    export_glb: bool = False
     # Render trajectory with the extracted mesh
     render_traj: bool = True
     # Depth cutoff distance in trajectory rendering (render_traj) will be multiplied by this factor
@@ -97,7 +101,7 @@ def main(args: Args, cfg: Config):
         max_depth, voxel_size, sdf_trunc_factor = args.extraction.safe_get(runner.scene_scale)
         print(
             f"[>] Single-level TSDF fusion: "
-            f"max_depth={max_depth:.2f} | voxel_size={voxel_size:.2f} | trunc_factor={sdf_trunc_factor:.1f}"
+            f"max_depth={max_depth:.2f} | voxel_size={voxel_size:.4f} | trunc_factor={sdf_trunc_factor:.1f}"
         )
         mesh = runner.run_tsdf_mesh_extraction(max_depth, voxel_size, sdf_trunc_factor)
     elif isinstance(args.extraction, TsdfMultiExtraction):
@@ -111,14 +115,16 @@ def main(args: Args, cfg: Config):
         assert_never(args.extraction)
 
     # Filter disconnected parts and perform mesh decimation
-    post = post_process_mesh(mesh, args.num_clusters, args.min_triangles, args.decimate_target)
-    mesh_file = mesh_dir / f"{args.extraction.get_name()}_step{ckpt_step}.ply"
+    post = post_process_mesh(mesh, args.num_clusters, args.skip_clusters, args.min_triangles, args.decimate_target)
+    suffix = "glb" if args.export_glb else "ply"
+    mesh_file = mesh_dir / f"{args.extraction.get_name()}_step{ckpt_step}.{suffix}"
     write_mesh(mesh_file, post)  # save mesh
 
     # Save config params
     config = asdict(args.extraction)
     config.update({
         "num_clusters": args.num_clusters,
+        "skip_clusters": args.skip_clusters,
         "min_triangles": args.min_triangles,
         "decimate_target": args.decimate_target,
     })

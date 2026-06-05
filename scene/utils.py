@@ -4,6 +4,7 @@ import copy
 import numpy as np
 import open3d as o3d
 import torch
+import pygltflib
 from sklearn.neighbors import NearestNeighbors
 from torch import Tensor
 import torch.nn.functional as F
@@ -273,46 +274,60 @@ def fix_normal_coordinates(normal_map):
     return normals.view(1, H, W, 3)
 
 
-def post_process_mesh(mesh, cluster_to_keep=128, min_triangles=0, decimate_target=0):
+def post_process_mesh(mesh, cluster_to_keep=128, clusters_to_skip=None, min_triangles=0, decimate_target=0):
     """
     Filter out disconnected parts and performs mesh decimation.
+    clusters_to_skip: list of 1-based ranks (after sorting by triangle count desc)
+                      to exclude. e.g. clusters_to_skip=[2] removes the 2nd largest.
+                      cluster_to_keep then applies to whatever ranks remain.
     """
     post = copy.deepcopy(mesh)
     with o3d.utility.VerbosityContextManager(o3d.utility.VerbosityLevel.Error):
         triangle_clusters, cluster_n_triangles, _ = post.cluster_connected_triangles()
-
     triangle_clusters   = np.asarray(triangle_clusters)
     cluster_n_triangles = np.asarray(cluster_n_triangles)
-
     print(f"[>] Found {len(cluster_n_triangles):,} clusters, largest has {cluster_n_triangles.max():,} triangles")
 
-    # Build per-triangle boolean mask
-    counts_per_triangle = cluster_n_triangles[triangle_clusters]
+    # Sort all cluster IDs by triangle count descending → gives us a stable rank order
+    sorted_ids = np.argsort(cluster_n_triangles)[::-1]   # sorted_ids[0] = rank-1 cluster ID
 
+    # Build skip set from 1-based ranks in sorted order
+    skip_set = set()
+    if clusters_to_skip:
+        for rank in clusters_to_skip:
+            if 1 <= rank <= len(sorted_ids):
+                skip_set.add(int(sorted_ids[rank - 1]))
+        print(f"[>] Skipping rank(s) {clusters_to_skip} → cluster id(s) {skip_set}")
+
+    # Remaining candidates in rank order (skipped ones removed)
+    eligible_ids = [cid for cid in sorted_ids if cid not in skip_set]
+
+    # Build rank_mask over all clusters (False by default)
     rank_mask = np.zeros(len(cluster_n_triangles), dtype=bool)
     if cluster_to_keep == 0:
-        print(f"[>] Keeping all clusters")
-        rank_mask[:] = True
+        print(f"[>] Keeping all eligible clusters ({len(eligible_ids)} after skips)")
+        keep_ids = eligible_ids
     else:
         print(f"[>] Keeping {cluster_to_keep} clusters in decreasing number of triangles")
-        rank_threshold = np.sort(cluster_n_triangles)[-cluster_to_keep]
-        rank_mask = cluster_n_triangles >= rank_threshold
+        keep_ids = eligible_ids[:cluster_to_keep]   # top-N from the post-skip ranked list
 
+    for cid in keep_ids:
+        rank_mask[cid] = True
+
+    # Per-triangle masks
+    counts_per_triangle = cluster_n_triangles[triangle_clusters]
     size_mask = (counts_per_triangle >= min_triangles) if min_triangles > 0 \
-                else np.ones(len(triangle_clusters), dtype=bool)  # keep all
+        else np.ones(len(triangle_clusters), dtype=bool)
 
-    # A triangle survives only if its cluster passes BOTH filters
     cluster_passes_rank = rank_mask[triangle_clusters]
     triangles_to_remove = ~(cluster_passes_rank & size_mask)
+
     post.remove_triangles_by_mask(triangles_to_remove)
     post.compute_vertex_normals()
-
-    # Clean up seam artifacts
     post.remove_duplicated_vertices()
     post.remove_unreferenced_vertices()
     post.remove_degenerate_triangles()
 
-    # Decimate
     n_tri = len(np.asarray(post.triangles))
     n_tri_decimate = 0
     if decimate_target > 0 and n_tri > decimate_target:
@@ -328,11 +343,86 @@ def post_process_mesh(mesh, cluster_to_keep=128, min_triangles=0, decimate_targe
     remaining = len(np.asarray(post.triangles))
     print(f"[>] Removed {triangles_to_remove.sum() + n_tri_decimate:,} triangles, {remaining:,} remaining")
     print(f"[>] Num vertices post-process: {len(post.vertices):,}")
-
     return post
 
 
+def srgb_to_linear(c):
+    return np.where(c <= 0.04045, c / 12.92, ((c + 0.055) / 1.055) ** 2.4)
+
+
+def linear_to_srgb(c):
+    return np.where(c <= 0.0031308, c * 12.92, 1.055 * np.power(c, 1.0/2.4) - 0.055)
+
+
+def write_mesh_glb(path, mesh):
+    vertices = np.asarray(mesh.vertices, dtype=np.float32)
+    faces = np.asarray(mesh.triangles, dtype=np.uint32)
+    colors = np.asarray(mesh.vertex_colors, dtype=np.float32)  # [N,3] float [0,1]
+
+    # Pack into binary blobs
+    verts_blob  = vertices.tobytes()
+    faces_blob  = faces.tobytes()
+    colors_blob = colors.tobytes()
+
+    gltf = pygltflib.GLTF2(
+        scene=0,
+        scenes=[pygltflib.Scene(nodes=[0])],
+        nodes=[pygltflib.Node(mesh=0)],
+        meshes=[pygltflib.Mesh(primitives=[
+            pygltflib.Primitive(
+                attributes=pygltflib.Attributes(
+                    POSITION=0,
+                    COLOR_0=1,
+                ),
+                indices=2,
+                material=0,
+            )
+        ])],
+        materials=[pygltflib.Material(
+            name="vertex_color_flat",
+            pbrMetallicRoughness=pygltflib.PbrMetallicRoughness(
+                baseColorFactor=[1.0, 1.0, 1.0, 1.0],  # white, so COLOR_0 shows through
+                metallicFactor=0.0,
+                roughnessFactor=1.0,
+            ),
+            extensions={"KHR_materials_unlit": {}},  # unlit = flat shading
+        )],
+        accessors=[
+            # 0: positions
+            pygltflib.Accessor(bufferView=0, componentType=pygltflib.FLOAT,
+                               count=len(vertices), type=pygltflib.VEC3,
+                               max=vertices.max(axis=0).tolist(),
+                               min=vertices.min(axis=0).tolist()),
+            # 1: colors
+            pygltflib.Accessor(bufferView=1, componentType=pygltflib.FLOAT,
+                               count=len(colors), type=pygltflib.VEC3),
+            # 2: indices
+            pygltflib.Accessor(bufferView=2, componentType=pygltflib.UNSIGNED_INT,
+                               count=faces.size, type=pygltflib.SCALAR),
+        ],
+        bufferViews=[
+            pygltflib.BufferView(buffer=0, byteOffset=0,               byteLength=len(verts_blob)),
+            pygltflib.BufferView(buffer=0, byteOffset=len(verts_blob), byteLength=len(colors_blob)),
+            pygltflib.BufferView(buffer=0, byteOffset=len(verts_blob)+len(colors_blob), byteLength=len(faces_blob)),
+        ],
+        buffers=[pygltflib.Buffer(byteLength=len(verts_blob)+len(colors_blob)+len(faces_blob))],
+        extensionsUsed=["KHR_materials_unlit"],
+    )
+
+    gltf.set_binary_blob(verts_blob + colors_blob + faces_blob)
+    gltf.save(str(path))
+
+
 def write_mesh(path, mesh):
-    o3d.io.write_triangle_mesh(
-        str(path), mesh, write_triangle_uvs=True, write_vertex_colors=True, write_vertex_normals=True)
+    if path.suffix.lower() == ".glb":
+        print(f"[>] Exporting mesh as GLB format")
+        write_mesh_glb(path, mesh)
+    else:
+        print(f"[>] Exporting mesh as PLY format")
+        o3d.io.write_triangle_mesh(
+            str(path), mesh,
+            write_triangle_uvs=True,
+            write_vertex_colors=True,
+            write_vertex_normals=True
+        )
     print(f"[>] Mesh written to: {path}")
