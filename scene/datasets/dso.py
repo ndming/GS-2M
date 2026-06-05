@@ -287,7 +287,7 @@ class Parser:
 
         if len(kf_stamps) == 0:
             raise ValueError(f"No images found in {data_dir}")
-        
+
         Ks_dict, imsize_dict, params_dict = _read_calibration(Path(data_dir) / "calibration.json", factor)
         mask_dict = { 0: None } # distorted images only
         # intrinsics_file = Path(data_dir) / "output" / "intrinsics.txt"
@@ -297,19 +297,22 @@ class Parser:
 
         image_dir = Path(data_dir) / "mav0" / "rgb" / "data"
         depth_dir = Path(data_dir) / "ffs"
-        
+
         # These two arrays match 1-to-1 (image and pose)
         c2w_mats = np.stack(kf_poses, axis=0)
         image_names = _read_image_names(image_dir, kf_stamps)
         camera_ids = [0] * len(image_names) # only use one camera at the moment
 
+        exposure_bias_ev = kwargs.get("exposure_bias", 0.0)
+        print(f"[>] Parser: applying exposure bias of {exposure_bias_ev:.1f} EV to input images")
+
         # Preprocess input images and depths
-        processed_image_dir = Path(data_dir) / f"processed_images_{factor}"
-        processed_depth_dir = Path(data_dir) / f"processed_depths_{factor}"
-        
+        processed_image_dir = Path(data_dir) / f"processed_images_{factor}x_{exposure_bias_ev:.1f}ev"
+        processed_depth_dir = Path(data_dir) / f"processed_depths_{factor}x"
+
         image_paths = process_input_images(
             str(image_dir), str(processed_image_dir), image_names, factor, reuse=reuse_processed_images,
-            mask_image=mask_gt_image
+            mask_image=mask_gt_image, exposure_bias=exposure_bias_ev
         )
         depth_paths = process_input_depths(
             str(depth_dir), str(processed_depth_dir), image_names, factor, reuse=reuse_processed_images,
@@ -382,7 +385,8 @@ class Parser:
             times_file = Path(data_dir) / "dso" / "times.txt"
             shutter_times, shutter_gains = _read_shutter_meta(times_file, kf_stamps)
             exposure_values = [
-                math.log2((t / (2.2 ** 2)) * g * 100.0) # Using hardcoded aperture f/2.2
+                # Using hardcoded aperture f/2.2
+                math.log2((t / (2.2 ** 2)) * g * 100.0) + exposure_bias_ev
                 if t is not None and t > 0.0 and g is not None else None 
                 for t, g in zip(shutter_times, shutter_gains)
             ]
@@ -396,7 +400,7 @@ class Parser:
                 ]
                 print(
                     f"[>] Parser: loaded exposure for {len(valid_exposures)}/{len(exposure_values)} images "
-                    f"(mean={exposure_mean:.3f} EV)"
+                    f"(mean={exposure_mean:.3f} EV | bias={exposure_bias_ev:.1f} EV)"
                 )
 
             else:

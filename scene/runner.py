@@ -59,6 +59,8 @@ class Config:
     render_traj_path: str = "interp"
     # If render_traj_path is interp, the output traj will have traj_num_interps * (n_poses - 1)
     traj_num_interps: int = 1
+    # If render_traj_path is ellipse/spiral, the output traj will have traj_num_frames frames
+    traj_num_frames: int = 120
 
     # Path to a scene directory
     data_dir: str = "data/scene"
@@ -82,6 +84,8 @@ class Config:
     camera_model: Literal["pinhole", "ortho", "fisheye"] = "pinhole"
     # Load EXIF exposure metadata from images (if available)
     load_exposure: bool = True
+    # Exposure bias in EV to apply to input images, only applies if load_exposure is True, default to 0.0 (no bias)
+    exposure_bias: float = 0.0
     # Mask GT RGB image during training for object-centric reconstruction
     mask_gt_image: bool = False
     # If set, skip pre-processing of GT RGB images and use the existing ones (if available)
@@ -425,6 +429,7 @@ class Runner:
             center_preserve_z=cfg.center_preserve_z,
             num_offset_frames=cfg.num_offset_frames,
             num_stride_frames=cfg.num_stride_frames,
+            exposure_bias=cfg.exposure_bias,
         )
         self.trainset = Dataset(
             self.parser,
@@ -1405,13 +1410,14 @@ class Runner:
         elif cfg.render_traj_path == "ellipse":
             height = camtoworlds_all[:, 2, 3].mean()
             camtoworlds_all = generate_ellipse_path_z(
-                camtoworlds_all, height=height
+                camtoworlds_all, height=height, n_frames=cfg.traj_num_frames
             )  # [N, 3, 4]
         elif cfg.render_traj_path == "spiral":
             camtoworlds_all = generate_spiral_path(
                 camtoworlds_all,
                 bounds=self.parser.bounds * self.scene_scale,
                 spiral_scale_r=self.parser.extconf["spiral_radius_scale"],
+                n_frames=cfg.traj_num_frames,
             )
         else:
             raise ValueError(
@@ -1504,13 +1510,14 @@ class Runner:
         elif cfg.render_traj_path == "ellipse":
             height = camtoworlds_all[:, 2, 3].mean()
             camtoworlds_all = generate_ellipse_path_z(
-                camtoworlds_all, height=height
+                camtoworlds_all, height=height, n_frames=cfg.traj_num_frames,
             )  # [N, 3, 4]
         elif cfg.render_traj_path == "spiral":
             camtoworlds_all = generate_spiral_path(
                 camtoworlds_all,
                 bounds=self.parser.bounds * self.scene_scale,
                 spiral_scale_r=self.parser.extconf["spiral_radius_scale"],
+                n_frames=cfg.traj_num_frames,
             )
         else:
             assert_never(cfg.render_traj_path)

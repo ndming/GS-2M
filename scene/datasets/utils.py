@@ -6,13 +6,17 @@ from PIL import Image
 from tqdm import tqdm
 
 
-def process_input_images(image_dir, target_dir, image_names, factor, reuse=False, mask_image=False, mask_dir=None):
+def process_input_images(
+    image_dir, target_dir, image_names, factor,
+    reuse=False, mask_image=False, mask_dir=None,
+    exposure_bias=0.0,
+):
     output_dir = Path(target_dir)
     os.makedirs(output_dir, exist_ok=True)
 
     original_dir = Path(image_dir)
     if (factor > 1):
-        print(f"[>] Training with images downscaled by {factor}x in {output_dir}")
+        print(f"[>] Using reference images downscaled by {factor}x in {output_dir}")
 
     # Remove existing files in target dir if not reusing processed images
     for image_file in original_dir.iterdir():
@@ -42,6 +46,15 @@ def process_input_images(image_dir, target_dir, image_names, factor, reuse=False
             r, g, b, a = image.split()
             image = Image.merge("RGB", (r, g, b))
             alpha = a if alpha is None else alpha # prioritize provided mask over alpha channel
+
+        if exposure_bias != 0.0:
+            gain = 2.0 ** exposure_bias
+            image_np = np.array(image)[..., :3].astype(np.float32) / 255.0
+            image_np = image_np ** 2.2 # sRGB to linear
+            image_np *= gain
+            image_np = np.clip(image_np, 0.0, 1.0)
+            image_np = image_np ** (1.0 / 2.2) # linear to sRGB
+            image = Image.fromarray((image_np * 255.0).astype(np.uint8))
 
         # Mask GT images before resizing
         if mask_image and alpha is not None:

@@ -42,6 +42,7 @@ class GsplatRenderTabState(RenderTabState):
     ] = "turbo"
     rasterize_mode: Literal["classic", "antialiased"] = "classic"
     camera_model: Literal["pinhole", "ortho", "fisheye"] = "pinhole"
+    up_direction: Literal["+Y", "+Z", "-Y", "-Z"] = "+Z"
 
 
 class GsplatViewer(Viewer):
@@ -234,6 +235,29 @@ class GsplatViewer(Viewer):
                     self.render_tab_state.camera_model = camera_model_dropdown.value
                     self.rerender(_)
 
+                up_direction_dropdown = server.gui.add_dropdown(
+                    "Up Direction",
+                    ("+Y", "+Z", "-Y", "-Z"),
+                    initial_value=self.render_tab_state.up_direction,
+                    hint="Viewer orbit up axis.",
+                )
+
+                @up_direction_dropdown.on_update
+                def _(_) -> None:
+                    self.render_tab_state.up_direction = up_direction_dropdown.value
+
+                    UP_MAP = {
+                        "+Y": (0, 1, 0),
+                        "+Z": (0, 0, 1),
+                        "-Y": (0, -1, 0),
+                        "-Z": (0, 0, -1),
+                    }
+
+                    up = UP_MAP[self.render_tab_state.up_direction]
+
+                    for client in self.server.get_clients().values():
+                        client.camera.up_direction = up
+
         self._rendering_tab_handles.update(
             {
                 "total_gs_count_number": total_gs_count_number,
@@ -248,6 +272,7 @@ class GsplatViewer(Viewer):
                 "colormap_dropdown": colormap_dropdown,
                 "rasterize_mode_dropdown": rasterize_mode_dropdown,
                 "camera_model_dropdown": camera_model_dropdown,
+                "up_direction_dropdown": up_direction_dropdown,
             }
         )
         super()._populate_rendering_tab()
@@ -260,6 +285,20 @@ class GsplatViewer(Viewer):
         self._rendering_tab_handles[
             "rendered_gs_count_number"
         ].value = self.render_tab_state.rendered_gs_count
+
+    def _connect_client(self, client: viser.ClientHandle):
+        super()._connect_client(client)
+
+        UP_MAP = {
+            "+Y": (0, 1, 0),
+            "+Z": (0, 0, 1),
+            "-Y": (0, -1, 0),
+            "-Z": (0, 0, -1),
+        }
+
+        client.camera.up_direction = UP_MAP[
+            self.render_tab_state.up_direction
+        ]
 
 
 def main(local_rank: int, world_rank, world_size: int, args):

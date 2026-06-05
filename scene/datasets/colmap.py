@@ -141,14 +141,22 @@ class Parser:
         if os.path.exists(posefile):
             self.bounds = np.load(posefile)[:, -2:]
 
+        exposure_bias_ev = kwargs.get("exposure_bias", 0.0)
+        if exposure_bias_ev != 0.0:
+            print(f"[>] Parser: applying exposure bias of {exposure_bias_ev:.1f} EV to input images")
+
         # Preprocess input images
         colmap_image_dir = os.path.join(data_dir, "images")
         if not os.path.exists(colmap_image_dir):
             raise ValueError(f"COLMAP image dir {colmap_image_dir} does not exist!")
-        processed_image_dir = Path(colmap_image_dir).parent / f"processed_images_{factor}"
+
+        processed_image_dir = Path(colmap_image_dir).parent / f"processed_images_{factor}x_{exposure_bias_ev:.1f}ev"
+        mask_image_dir = Path(colmap_image_dir).parent / "masks"
+        mask_image_dir = mask_image_dir if mask_gt_image and mask_image_dir.exists() else None
         image_paths = process_input_images(
             colmap_image_dir, str(processed_image_dir), image_names, factor, reuse=reuse_processed_images,
-            mask_image=mask_gt_image)
+            mask_image=mask_gt_image, mask_dir=mask_image_dir, exposure_bias=exposure_bias_ev
+        )
 
         # Downsampled images may have different names vs images used for COLMAP,
         # so we need to map between the two sorted lists of files.

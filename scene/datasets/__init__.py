@@ -54,11 +54,11 @@ class Dataset:
 
     def __getitem__(self, item: int) -> Dict[str, Any]:
         index = self.indices[item]
-        
+
         input = imageio.imread(self.parser.image_paths[index])
         image = input[..., :3]  # [H, W, 3]
         alpha = input[..., 3:]  # [H, W, 1]
-        
+
         camera_id = self.parser.camera_ids[index]
         K = self.parser.Ks_dict[camera_id].copy()  # undistorted K
         params = self.parser.params_dict[camera_id]
@@ -132,11 +132,11 @@ class Dataset:
         if self.load_image_depth:
             if not hasattr(self.parser, "depth_paths") or self.parser.depth_paths is None:
                 raise ValueError(f"The current scene loader ({self.parser.__class__.__name__}) does not support image depth")
-            
+
             depth = cv2.imread(self.parser.depth_paths[index], cv2.IMREAD_UNCHANGED)
             depth = depth.astype(np.float32)
             depth = depth * self.parser.depth_scale
-            
+
             if len(params) > 0:
                 # Undistort depth image, very unlikely
                 depth = cv2.remap(depth, mapx, mapy, cv2.INTER_NEAREST)
@@ -144,7 +144,7 @@ class Dataset:
 
             if self.patch_size is not None:
                 depth = depth[y : y + self.patch_size, x : x + self.patch_size]
-  
+
             data["depth_image"] = torch.from_numpy(depth).float().unsqueeze(-1) # [H, W, 1]
 
         return data

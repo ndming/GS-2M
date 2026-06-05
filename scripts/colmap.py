@@ -11,7 +11,7 @@ from tqdm import tqdm
 # The conversion is based on the convert.py script from the 3D Gaussian Splatting repo:
 # https://github.com/graphdeco-inria/gaussian-splatting/blob/main/convert.py
 
-def extract_features_and_mapping(colmap_exec, src, camera, colmap_feature_extraction, colmap_feature_matching):
+def extract_features_and_mapping(colmap_exec, src, camera, params, colmap_feature_extraction, colmap_feature_matching):
     os.makedirs(f"{src}/distorted/sparse", exist_ok=True)
 
     db_path = f"{src}/distorted/database.db"
@@ -25,10 +25,13 @@ def extract_features_and_mapping(colmap_exec, src, camera, colmap_feature_extrac
         f"--image_path {img_path} "
         f"--ImageReader.single_camera 1 "
         f"--ImageReader.camera_model {camera} "
+        # f"--ImageReader.camera_params {params} "
         f"--FeatureExtraction.use_gpu 1 "
         f"--FeatureExtraction.type {colmap_feature_extraction} "
         f"--AlikedExtraction.max_num_features 4096"
     )
+    if params != "":
+        feat_extract += f" --ImageReader.camera_params {params}"
     exit_code = os.system(feat_extract)
     if exit_code != 0:
         print(f"Feature extraction failed with code {exit_code}. Exiting...")
@@ -165,6 +168,7 @@ if __name__ == "__main__":
     parser.add_argument("--skip_matching", action='store_true')
     parser.add_argument("--source_path", "-s", required=True, type=str)
     parser.add_argument("--camera", default="OPENCV", type=str)
+    parser.add_argument("--params", default="", type=str, help="Camera parameters, comma separated")
     parser.add_argument("--colmap_executable", default="", type=str)
     parser.add_argument("--resize", action="store_true")
     parser.add_argument("--magick_executable", default="", type=str)
@@ -205,7 +209,7 @@ if __name__ == "__main__":
     
     if not args.skip_matching:
         extract_features_and_mapping(
-            colmap_exec, args.source_path, args.camera,
+            colmap_exec, args.source_path, args.camera, args.params,
             args.colmap_feature_extraction, args.colmap_feature_matching)
 
     undistort_image(colmap_exec, args.source_path)
