@@ -274,7 +274,7 @@ def fix_normal_coordinates(normal_map):
     return normals.view(1, H, W, 3)
 
 
-def post_process_mesh(mesh, cluster_to_keep=128, clusters_to_skip=None, min_triangles=0, decimate_target=0):
+def post_process_mesh(mesh, cluster_to_keep=128, clusters_to_skip=[], min_triangles=0, decimate_target=0):
     """
     Filter out disconnected parts and performs mesh decimation.
     clusters_to_skip: list of 1-based ranks (after sorting by triangle count desc)
@@ -293,7 +293,7 @@ def post_process_mesh(mesh, cluster_to_keep=128, clusters_to_skip=None, min_tria
 
     # Build skip set from 1-based ranks in sorted order
     skip_set = set()
-    if clusters_to_skip:
+    if len(clusters_to_skip) > 0:
         for rank in clusters_to_skip:
             if 1 <= rank <= len(sorted_ids):
                 skip_set.add(int(sorted_ids[rank - 1]))

@@ -70,7 +70,7 @@ class Args:
     # How many clusters to keep during post-processing, 0 to keep all
     num_clusters: int = 0
     # List of 1-based ranks to exclude during post-processing, None to keep all
-    skip_clusters: List[int] = None
+    skip_clusters: List[int] = field(default_factory=lambda: [])
     # Clusters with triangle count smaller than this number will be removed, 0 to keep all
     min_triangles: int = 0
     # Reduce the number of triangle count to be at most this decimation target, 0 to keep all 
