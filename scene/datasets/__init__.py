@@ -8,7 +8,7 @@ import imageio.v2 as imageio
 import numpy as np
 
 from .colmap import Parser as ColmapParser
-from .dso import Parser as DsoParser
+from .dso    import Parser as DsoParser
 
 
 def get_parser(data_dir):
@@ -18,6 +18,7 @@ def get_parser(data_dir):
     if (Path(data_dir) / "dso").exists():
         print("[>] Detected dso dir, assuming DSO scene")
         return DsoParser
+    raise ValueError(f"Could NOT auto detect dataset type for {data_dir}")
 
 
 class Dataset:

@@ -42,8 +42,11 @@ class Parser:
             colmap_dir
         ), f"COLMAP directory {colmap_dir} does not exist."
 
+        rgb_dir = kwargs.get("colmap_image_dir", "images")
+        image_name_offset = kwargs.get("colmap_image_name_offset", 0)
+
         # image_path is not being used internally, but specify one anyway to silence warning
-        manager = SceneManager(colmap_dir, image_path="images/")
+        manager = SceneManager(colmap_dir, image_path=rgb_dir)
         manager.load()
 
         # Extract extrinsic matrices in world-to-camera format
@@ -117,6 +120,7 @@ class Parser:
         # Image names from COLMAP. No need for permuting the poses according to
         # image names anymore. These are pure file names with suffix (not a path).
         image_names = [imdata[k].name for k in imdata]
+        image_names = [name[image_name_offset:] for name in image_names]
 
         # Previous Nerf results were generated with images sorted by filename,
         # ensure metrics are reported on the same test set.
@@ -146,7 +150,7 @@ class Parser:
             print(f"[>] Parser: applying exposure bias of {exposure_bias_ev:.1f} EV to input images")
 
         # Preprocess input images
-        colmap_image_dir = os.path.join(data_dir, "images")
+        colmap_image_dir = os.path.join(data_dir, rgb_dir)
         if not os.path.exists(colmap_image_dir):
             raise ValueError(f"COLMAP image dir {colmap_image_dir} does not exist!")
 

@@ -94,6 +94,10 @@ class Config:
     num_offset_frames: int = 0
     # Load frames at this interval for certain datasets
     num_stride_frames: int = 1
+    # The image directory name in COLMAP datasets
+    colmap_image_dir: str = "images"
+    # Trim this many of starting characters from each COLMAP image file name stored in its database
+    colmap_image_name_offset: int = 0
 
     # Port for the viewer server
     port: int = 8080
@@ -430,6 +434,8 @@ class Runner:
             num_offset_frames=cfg.num_offset_frames,
             num_stride_frames=cfg.num_stride_frames,
             exposure_bias=cfg.exposure_bias,
+            colmap_image_dir=cfg.colmap_image_dir,
+            colmap_image_name_offset=cfg.colmap_image_name_offset,
         )
         self.trainset = Dataset(
             self.parser,
