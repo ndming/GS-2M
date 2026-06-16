@@ -94,7 +94,7 @@ SfM prepares training data from unposed images, for which [COLMAP](https://githu
 While you can follow the instructions from the original [3DGS](https://github.com/graphdeco-inria/gaussian-splatting?tab=readme-ov-file#processing-your-own-scenes) repo to run COLMAP for your scene, we prepared an automatic COLMAP run script
 for convenience. It is based on the original `convert.py` script of 3DGS, modified to account for the new features of
 COLMAP `4.0` such as global mapping ([GLOMAP](https://lpanaf.github.io/eccv24_glomap/)) or neural feature extraction and
-matching from [ALIKED](https://github.com/Shiaoming/ALIKED) and [LightGlue](https://github.com/cvg/lightglue).
+matching using [ALIKED](https://github.com/Shiaoming/ALIKED) and [LightGlue](https://github.com/cvg/lightglue).
 
 First, please follow COLMAP's [offical installation guide](https://colmap.github.io/install.html) to install the base 
 `colmap` binary with version `4.0` as the minimum. Once done, organize your images with the following structure:
@@ -111,18 +111,10 @@ Run the following command to begin the SfM process (make sure the installed `gs2
 python scripts/colmap.py --source_path <path/to/scene>
 ```
 
-<details>
-<summary><span style="font-weight: bold;">Options to sample from videos or enable advanced COLMAP features</span></summary>
-
-- `sample_from`: path to a video or directory used to generate input frames. When provided, frames are sampled (for videos)
-or copied (for directories) and written to a fresh `input` directory created under `scene` (or overwrite the existing ones 
-if `--sample_overwrite` is given). If not set (default), the script uses the existing contents of `input` without modification.
-- `sample_interval`: sample frames every this interval, only applies if `sample_from` is not empty
-- `colmap_feature_extraction`: one of `SIFT`, `ALIKED_N16ROT`, or `ALIKED_N32` (default to `SIFT`)
-- `colmap_feature_matching`: one of `SIFT_BRUTEFORCE`, `SIFT_LIGHTGLUE`, `ALIKED_BRUTEFORCE`, or `ALIKED_LIGHTGLUE` 
-(default to `SIFT_BRUTEFORCE`)
-
-</details>
+To get a list of useful options (sample from videos or enable advanced COLMAP features):
+```bash
+python scripts/colmap.py -h
+```
 
 A COLMAP-prepared training directory for GS-2M may look like the following. Note that `masks` is completely optional.
 If you have foreground masks of the target object, organize them as shown below. 

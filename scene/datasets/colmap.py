@@ -129,6 +129,13 @@ class Parser:
         camtoworlds = camtoworlds[inds]
         camera_ids = [camera_ids[i] for i in inds]
 
+        # Optional frame subsampling.
+        stride = kwargs.get("num_stride_frames", 1)
+        if stride > 1:
+            image_names = image_names[::stride]
+            camtoworlds = camtoworlds[::stride]
+            camera_ids = camera_ids[::stride]
+
         # Load extended metadata. Used by Bilarf dataset.
         self.extconf = {
             "spiral_radius_scale": 1.0,
