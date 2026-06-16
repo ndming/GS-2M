@@ -20,6 +20,7 @@ submodules/nvdiffrast
 submodules/render-utils
 submodules/fused-ssim
 submodules/fused-bilagrid
+submodules/patch-ncc
 
 # Foreground masking with BiRefNet
 einops

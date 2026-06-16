@@ -40,6 +40,9 @@ First, clone the repo and submodules:
 ```bash
 git clone https://github.com/ndming/GS-2M.git --recursive
 cd GS-2M
+
+# If you forget the --recursive flag or checkout from main
+git submodule update --init --recursive
 ```
 
 From here, you can proceed with the installation either by:
@@ -63,7 +66,7 @@ pip install --upgrade setuptools==68 wheel numpy==1.26.4
 ```
 
 Install a version of [PyTorch and TorchVision](https://pytorch.org/get-started/previous-versions/) compatible with
-your CUDA version (`cu12.8` as an example):
+your CUDA version (`cu128` as an example):
 ```bash
 pip install torch==2.7.1 torchvision==0.22.1 torchaudio==2.7.1 --index-url https://download.pytorch.org/whl/cu128
 ```
