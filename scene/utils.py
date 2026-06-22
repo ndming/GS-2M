@@ -129,7 +129,8 @@ class PatchMatch:
         max_num_samples,
         angle_factor,
         angle_noise_threshold,
-        geo_exponential_decay,
+        geo_weights_decay_rate,
+        ncc_weights_decay_rate,
         optimize_geo=True,
         optimize_ncc=True,
         device="cuda",
@@ -139,7 +140,8 @@ class PatchMatch:
         self.max_num_samples = max_num_samples
         self.angle_factor = angle_factor   # scale the per-point angular error
         self.angle_noise_th = angle_noise_threshold * np.pi / 180.0  # radians
-        self.geo_exponential_decay = geo_exponential_decay
+        self.geo_weights_decay_rate = geo_weights_decay_rate
+        self.ncc_weights_decay_rate = ncc_weights_decay_rate
         self.optimize_geo = optimize_geo
         self.optimize_ncc = optimize_ncc
         self.device = device
@@ -171,7 +173,7 @@ class PatchMatch:
         depth_ref,   # [1, H, W, 1]
         depth_nea,   # [1, H, W, 1]
         normal_ref,  # [1, H, W, 3]
-        normal_nea,  # [1, H, W, 3] or None, provide to enfore multi-view normal consistency
+        normal_nea,  # [1, H, W, 3]
     ):
         cam_ref_params = cam_params_from_data_batch(data_ref)
         cam_nea_params = cam_params_from_data_batch(data_nea)
@@ -286,7 +288,7 @@ class PatchMatch:
                 return zero_tensor, zero_tensor
 
         with torch.no_grad():
-            weights_geo = torch.exp(-pixel_noise * self.geo_exponential_decay)  # [N,]
+            weights_geo = torch.exp(-pixel_noise * self.geo_weights_decay_rate)  # [N,]
             weights_geo[~valid_noise] = 0.0
 
         if self.optimize_geo:
@@ -299,9 +301,9 @@ class PatchMatch:
                 n_ref = F.normalize(n_ref @ R_ref.T, dim=-1)         # -> world, unit
                 n_nea = sample_normals[valid_occ_proj]               # [N, 3] cam-space (nea, detached)
                 n_nea = F.normalize(n_nea @ R_nea.T, dim=-1)         # -> world, unit
-                cos_sim = (n_ref * n_nea).sum(-1).clamp(-1 + 1e-6, 1 - 1e-6)  # [N]
-                angle_error = torch.acos(cos_sim)                    # [N, ], radians
-                angle_valid = angle_error < self.angle_noise_th      # [N, ]
+                cos_sim = (n_ref * n_nea).sum(-1).clamp(-1 + 1e-6, 1 - 1e-6)  # [N,]
+                angle_error = torch.acos(cos_sim)                    # [N,], radians
+                angle_valid = angle_error < self.angle_noise_th      # [N,]
                 if angle_valid.any():
                     angle_noise = self.angle_factor * angle_error
                     Lgeo += (weights_geo * angle_noise)[angle_valid].mean()
@@ -315,8 +317,8 @@ class PatchMatch:
         # Lncc
         with torch.no_grad():
             # Only keep the P pixels that also passed the noise threshold
-            final_indices = survived_indices[valid_noise]         # [P,]
-            weights_ncc   = torch.exp(-pixel_noise)[valid_noise]  # [P,]
+            final_indices = survived_indices[valid_noise]  # [P,]
+            weights_ncc   = torch.exp(-pixel_noise * self.ncc_weights_decay_rate)[valid_noise]  # [P,]
 
             # Cap samples for NCC to save computation — applied here only,
             # geo loss above already used all N survivors unrestricted

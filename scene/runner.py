@@ -258,18 +258,15 @@ class Config:
     multi_view_occlusion_threshold: float = 5e-4
     # Multi-view normal consistency (part of the geo loss): scales the per-point angular error
     # between reference and neighbor normals; 0 to disable. Requires multi_view_geo_lambda > 0.
-    multi_view_angle_factor: float = 1.0
-    # How rapidly the weights for multi-view geometric consistency decay due to reprojection noises
-    mutli_view_geo_exponential_decay: float = 3.0
+    multi_view_angle_factor: float = 2.0
     # Only neighbor normals within this angular difference (degrees) contribute to the normal loss
     multi_view_angle_noise_threshold: float = 30.0
     # The maximum number of depth values to sample from nearest views in mutli-view losses, 0 to use all
     multi_view_max_num_samples: int = 0
-    # Reuse each view's render (cached from when it was the main render) for the neighbor instead of
-    # rendering it again. Avoids the extra rasterization. Assumes pose_opt/pose_noise are off.
-    multi_view_cache: bool = True
-    # Max age (in steps) of a cached neighbor render before it is re-rendered; -1 = no limit
-    multi_view_cache_max_age: int = -1
+    # How rapidly multi-view geometrically consistent weights decay as a function of reprojection errors
+    multi_view_geo_weights_decay_rate: float = 3.0
+    # How rapidly multi-view photometrically consistent weights decay as a function of reprojection errors
+    multi_view_ncc_weights_decay_rate: float = 1.0
 
     # Dump information to tensorboard every this steps
     tb_every: int = 100
@@ -815,15 +812,16 @@ class Runner:
             max_num_samples=cfg.multi_view_max_num_samples,
             angle_factor=cfg.multi_view_angle_factor,
             angle_noise_threshold=cfg.multi_view_angle_noise_threshold,
-            geo_exponential_decay=cfg.mutli_view_geo_exponential_decay,
+            geo_weights_decay_rate=cfg.multi_view_geo_weights_decay_rate,
+            ncc_weights_decay_rate=cfg.multi_view_ncc_weights_decay_rate,
             optimize_ncc=cfg.multi_view_ncc_lambda > 0.0,
             optimize_geo=cfg.multi_view_geo_lambda > 0.0,
             device=self.device,
         )
 
-        # Store image_id -> {"depth": [1, H, W, 1], "normal": [1, H, W, 3], "step": int}
-        # for the multi-view render cache, cutting down training time.
-        self.multi_view_cache = {}
+        # Multi-view losses are applied in intervals, we want to retain
+        # non-zero loss values across iterations, so storing as class member
+        self.mv_loss = 0.0
 
     def freeze_gaussians(self):
         """Freeze all Gaussian parameters for controller distillation.
@@ -1079,15 +1077,6 @@ class Runner:
             else:
                 colors, depths = renders, None
 
-            # Cache this view's render (depth + normal) so it can be reused as a neighbor
-            # later, sparing the extra nearest-view render in the multi-view loss.
-            if cfg.multi_view_cache and depths is not None:
-                self.multi_view_cache[data["image_id"].item()] = {
-                    "depth":  depths.detach(),
-                    "normal": info["render_normals_c"].detach() if "render_normals_c" in info else None,
-                    "step":   step,
-                }
-
             if cfg.random_bkgd:
                 bkgd = torch.rand(1, 3, device=device)
                 colors = colors + bkgd * (1.0 - alphas)
@@ -1163,7 +1152,7 @@ class Runner:
                 loss += cfg.depth_normal_lambda * depth_normal_loss
 
             # Multi-view loss
-            ncc_loss, geo_loss, mv_loss = 0.0, 0.0, 0.0
+            ncc_loss, geo_loss = 0.0, 0.0
             multi_view_kicked_in = (cfg.multi_view_geo_lambda > 0.0 
                 or cfg.multi_view_ncc_lambda > 0.0) and step >= cfg.multi_view_loss_from_iter
             if step % cfg.multi_view_loss_every == 0 and multi_view_kicked_in:
@@ -1173,57 +1162,37 @@ class Runner:
                     # We need to create batch dim for data_nearest because we
                     # randomly index into the dataset class, not via data loader.
                     data_nearest = self.trainset[random.choice(nearest_indices)]
-                    id_nea = data_nearest["image_id"]
-                    normals = info["render_normals_c"]  # [1, H, W, 3]
+                    id_nea  = data_nearest["image_id"]
+                    c2w_nea = data_nearest["camtoworld"].unsqueeze(0).to(device)  # [1, 4, 4]
+                    K_nea   = data_nearest["K"].unsqueeze(0).to(device)           # [1, 3, 3]
+                    H_nea, W_nea = data_nearest["image"].shape[:2]
+                    image_id_nea = torch.tensor([id_nea], device=device).unsqueeze(0)
+                    cam_idcs_nea = torch.tensor([data_nearest["camera_idx"]], device=device).unsqueeze(0)
+                    masks_nea = data_nearest["mask"].unsqueeze(0).to(device) if "mask" in data_nearest else None  # [1, H, W]
 
-                    # Try to reuse the neighbor's render from when it was last a main view,
-                    # avoiding a second full rasterization. We cache both depth and normal:
-                    # depth is used now, normal is reserved for nearest-view normal consistency.
-                    cached = self.multi_view_cache.get(id_nea) if cfg.multi_view_cache else None
-                    cache_hit = cached is not None and (
-                        cfg.multi_view_cache_max_age < 0
-                        or step - cached["step"] <= cfg.multi_view_cache_max_age
-                    )
-                    if cache_hit:
-                        depths_nearest = cached["depth"]
-                        normals_nearest = cached["normal"]
-                    else:
-                        c2w_nea = data_nearest["camtoworld"].unsqueeze(0).to(device)  # [1, 4, 4]
-                        K_nea   = data_nearest["K"].unsqueeze(0).to(device)           # [1, 3, 3]
-                        H_nea, W_nea = data_nearest["image"].shape[:2]
-                        image_id_nea = torch.tensor([id_nea], device=device).unsqueeze(0)
-                        cam_idcs_nea = torch.tensor([data_nearest["camera_idx"]], device=device).unsqueeze(0)
-                        masks_nea = data_nearest["mask"].unsqueeze(0).to(device) if "mask" in data_nearest else None  # [1, H, W]
-
-                        with torch.no_grad():
-                            depths_nearest, _, info_nearest = self.rasterize_splats(
-                                camtoworlds=c2w_nea,
-                                Ks=K_nea,
-                                width=W_nea,
-                                height=H_nea,
-                                sh_degree=sh_degree_to_use,
-                                near_plane=cfg.near_plane,
-                                far_plane=cfg.far_plane,
-                                image_ids=image_id_nea,
-                                render_mode="PD",  # render depth only
-                                masks=masks_nea,
-                                frame_idcs=image_id_nea,
-                                camera_idcs=cam_idcs_nea,
-                            )
-
+                    with torch.set_grad_enabled(cfg.multi_view_geo_lambda > 0.0):
+                        depths_nearest, _, info_nearest = self.rasterize_splats(
+                            camtoworlds=c2w_nea,
+                            Ks=K_nea,
+                            width=W_nea,
+                            height=H_nea,
+                            sh_degree=sh_degree_to_use,
+                            near_plane=cfg.near_plane,
+                            far_plane=cfg.far_plane,
+                            image_ids=image_id_nea,
+                            render_mode="PD",  # render depth only
+                            masks=masks_nea,
+                            frame_idcs=image_id_nea,
+                            camera_idcs=cam_idcs_nea,
+                        )
+                        normals = info["render_normals_c"]  # [1, H, W, 3]
                         normals_nearest = info_nearest["render_normals_c"]  # [1, H, W, 3]
-                        if cfg.multi_view_cache:
-                            self.multi_view_cache[id_nea] = {
-                                "depth":  depths_nearest.detach(),
-                                "normal": normals_nearest.detach(),
-                                "step":   step,
-                            }
 
                     Lncc, Lgeo = self.pm(data, data_nearest, depths, depths_nearest, normals, normals_nearest)
                     multi_view_loss = cfg.multi_view_ncc_lambda * Lncc + cfg.multi_view_geo_lambda * Lgeo
 
                     ncc_loss, geo_loss = Lncc, Lgeo
-                    mv_loss = multi_view_loss.item()
+                    self.mv_loss = multi_view_loss.item()
 
                     loss += multi_view_loss
 
@@ -1273,7 +1242,7 @@ class Runner:
                 if depth_point_kicked_in or depth_image_kicked_in or depth_normal_kicked_in:
                     postfix_dict["Ldepth"] = f"{depth_loss:.5f}"
                 if multi_view_kicked_in:
-                    postfix_dict["Lmv"] = f"{mv_loss:.5f}"
+                    postfix_dict["Lmv"] = f"{self.mv_loss:.5f}"
                 n_points = len(self.splats["means"])
                 postfix_dict["Points"] = f"{n_points}"
                 if cfg.pose_opt and cfg.pose_noise:
@@ -1290,7 +1259,7 @@ class Runner:
                 self.writer.add_scalar("train/num_GS", len(self.splats["means"]), step)
                 self.writer.add_scalar("train/mem", mem, step)
                 self.writer.add_scalar("train/Ldepth", depth_loss, step)
-                self.writer.add_scalar("train/Lmv", mv_loss, step)
+                self.writer.add_scalar("train/Lmv", self.mv_loss, step)
                 self.writer.add_scalar("train/Lncc", ncc_loss, step)
                 self.writer.add_scalar("train/Lgeo", geo_loss, step)
                 if cfg.post_processing is not None:
