@@ -166,7 +166,7 @@ class Parser:
         mask_image_dir = mask_image_dir if mask_gt_image and mask_image_dir.exists() else None
         image_paths = process_input_images(
             colmap_image_dir, str(processed_image_dir), image_names, factor, reuse=reuse_processed_images,
-            mask_image=mask_gt_image, mask_dir=mask_image_dir, exposure_bias=exposure_bias_ev
+            mask_image=mask_gt_image, mask_dir=mask_image_dir, exposure_bias=exposure_bias_ev, num_workers=4,
         )
 
         # Downsampled images may have different names vs images used for COLMAP,

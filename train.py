@@ -89,12 +89,20 @@ if __name__ == "__main__":
     should_set_depth_render_mode = (
         cfg.depth_point_lambda  > 0.0 or
         cfg.depth_image_lambda  > 0.0 or
-        cfg.depth_normal_lambda > 0.0
+        cfg.depth_normal_lambda > 0.0 or
+        cfg.multi_view_geo_lambda > 0.0 or
+        cfg.multi_view_ncc_lambda > 0.0
     )
     if should_set_depth_render_mode:
-        assert cfg.depth_render_mode is not None, "Depth regularization is enabled but depth_render_mode is not set"
+        assert cfg.depth_render_mode is not None, "Depth regularization is required but depth_render_mode is not set"
     if cfg.depth_normal_lambda > 0.0:
-        assert cfg.depth_render_mode == "plane", "Depth normal consistency loss is only supported with plane depth"
+        assert cfg.depth_render_mode == "plane", "Depth normal consistency loss required plane depth"
+    if cfg.multi_view_geo_lambda > 0.0:
+        assert cfg.depth_render_mode == "plane", "Multi-view geometric consistency loss required plane depth"
+    if cfg.multi_view_ncc_lambda > 0.0:
+        assert cfg.depth_render_mode == "plane", "Multi-view photometric consistency loss required plane depth"
+    if cfg.multi_view_geo_lambda > 0.0 or cfg.multi_view_ncc_lambda > 0.0:
+        assert cfg.batch_size == 1, "Multi-view losses require batch size 1"
 
     assert pathlib.Path(cfg.data_dir).exists(), f"Could NOT find data directory {cfg.data_dir}"
     cli(main, cfg, verbose=True)

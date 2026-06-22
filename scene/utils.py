@@ -10,7 +10,7 @@ from torch import Tensor
 import torch.nn.functional as F
 import matplotlib.pyplot as plt
 from matplotlib import colormaps
-
+from patch_ncc import warp_patch_ncc
 
 class CameraOptModule(torch.nn.Module):
     """Camera pose optimization module."""
@@ -115,6 +115,295 @@ class AppearanceOptModule(torch.nn.Module):
             h = torch.cat([features, sh_bases], dim=-1)
         colors = self.color_head(h)
         return colors
+
+
+# Adapted from: Geometry-Grounded Gaussian Splatting
+# https://github.com/HKUST-SAIL/Geometry-Grounded-Gaussian-Splatting
+class PatchMatch:
+    """Multi-view consistency module"""
+
+    def __init__(
+        self,
+        pixel_noise_threshold,
+        occlusion_threshold,
+        max_num_samples,
+        angle_factor,
+        angle_noise_threshold,
+        geo_exponential_decay,
+        optimize_geo=True,
+        optimize_ncc=True,
+        device="cuda",
+    ):
+        self.pixel_noise_th = pixel_noise_threshold
+        self.occlusion_th = occlusion_threshold
+        self.max_num_samples = max_num_samples
+        self.angle_factor = angle_factor   # scale the per-point angular error
+        self.angle_noise_th = angle_noise_threshold * np.pi / 180.0  # radians
+        self.geo_exponential_decay = geo_exponential_decay
+        self.optimize_geo = optimize_geo
+        self.optimize_ncc = optimize_ncc
+        self.device = device
+        self._grid_cache = {}
+
+    def _grids(self, h, w):
+        """Cache the per-resolution pixel grid and flat index range.
+
+        These depend only on (H, W), which is constant across the dataset, so
+        rebuilding them on every call wastes several kernel launches.
+        """
+        cached = self._grid_cache.get((h, w))
+        if cached is None:
+            ix_ref, iy_ref = torch.meshgrid(
+                torch.arange(w, device=self.device),
+                torch.arange(h, device=self.device),
+                indexing="xy",
+            )
+            pixel_grid_flat = torch.stack([ix_ref, iy_ref], dim=-1).float().reshape(-1, 2)  # [H * W, 2]
+            flat_indices    = torch.arange(h * w, device=self.device)                       # [H * W]
+            cached = (pixel_grid_flat, flat_indices)
+            self._grid_cache[(h, w)] = cached
+        return cached
+
+    def __call__(
+        self,
+        data_ref,
+        data_nea,
+        depth_ref,   # [1, H, W, 1]
+        depth_nea,   # [1, H, W, 1]
+        normal_ref,  # [1, H, W, 3]
+        normal_nea,  # [1, H, W, 3] or None, provide to enfore multi-view normal consistency
+    ):
+        cam_ref_params = cam_params_from_data_batch(data_ref)
+        cam_nea_params = cam_params_from_data_batch(data_nea)
+
+        # c2w transforms of both views
+        c2w_ref = data_ref["camtoworld"].to(self.device).squeeze()  # [4, 4]
+        c2w_nea = data_nea["camtoworld"].to(self.device).squeeze()  # [4, 4]
+        R_ref = c2w_ref[:3, :3]  # [3, 3]
+        R_nea = c2w_nea[:3, :3]  # [3, 3]
+        t_ref = c2w_ref[:3,  3]  # [3,]
+        t_nea = c2w_nea[:3,  3]  # [3,]
+
+        with torch.no_grad():
+            w_ref, h_ref = cam_ref_params["W"], cam_ref_params["H"]
+            fx_ref, fy_ref = cam_ref_params["fx"], cam_ref_params["fy"]
+            cx_ref, cy_ref = cam_ref_params["cx"], cam_ref_params["cy"]
+            ix = (torch.arange(w_ref, device=self.device, dtype=torch.float32) - cx_ref) / fx_ref
+            iy = (torch.arange(h_ref, device=self.device, dtype=torch.float32) - cy_ref) / fy_ref
+            R_nea_to_ref = R_nea.T @ R_ref
+            t_nea_to_ref = (t_nea - t_ref) @ R_ref
+            # Ref -> nea transform (constant): reused for both the geo
+            # forward-projection below and the NCC patch warping
+            R_ref_to_nea = R_ref.T @ R_nea
+            t_ref_to_nea = (t_ref - t_nea) @ R_nea
+
+            # Flat pixel grid + index range, cached per resolution
+            pixel_grid_flat, flat_indices = self._grids(h_ref, w_ref)
+
+        # Whether to also enforce multi-view normal consistency (part of Lgeo)
+        compute_angle = self.optimize_geo and self.angle_factor > 0.0 and normal_nea is not None
+
+        # Lgeo
+        with torch.set_grad_enabled(self.optimize_geo):
+            # Back-project pixels to camera points using depth map of reference view
+            depth_reshape = depth_ref.squeeze().unsqueeze(-1) # [H, W, 1]
+            pts_cam_ref = torch.cat(
+                [
+                    depth_reshape * ix[None, :, None],
+                    depth_reshape * iy[:, None, None],
+                    depth_reshape,
+                ],
+                dim=-1,
+            ) # [H, W, 3]
+
+            # Move cam points in reference view to nearest view (single affine)
+            pts_cam_nea = pts_cam_ref @ R_ref_to_nea + t_ref_to_nea  # [H, W, 3]
+            K_nea = data_nea["K"].to(self.device)                    # [3, 3]
+            pts_proj_nea = pts_cam_nea @ K_nea.T      # [H, W, 3]
+            w_nea, h_nea = cam_nea_params["W"], cam_nea_params["H"]
+            pixels_nea = pts_proj_nea[..., :2] / pts_proj_nea[..., 2:3]  # [H, W, 2]
+            valid_proj = (
+                # Image coordinates must be non-negative, ...
+                (pixels_nea[..., 0] >= 0) & (pixels_nea[..., 1] >= 0) &
+                # ... within the image bounds, ...
+                (pixels_nea[..., 0] < w_nea) & (pixels_nea[..., 1] < h_nea) &
+                # ... land on pixels whose depth in front of the image plane, ...
+                (pts_cam_nea[..., 2] > 0.2) &
+                # ... and come from valid reference depths
+                (pts_cam_ref[..., 2] > 0.2) & (depth_reshape[..., 0] > 1e-6)
+            ) # [H, W]
+
+            # Flatten valid_proj mask into 1D indices,
+            # track which flat pixels survived projection
+            valid_proj_indices = flat_indices[valid_proj.reshape(-1)]  # [M,], where M = valid_proj.sum()
+            sample_pixels = pixels_nea[valid_proj]                     # [M, 2]
+            sample_depths = sample_map(sample_pixels, depth_nea)       # [M, 1]
+            if compute_angle:
+                # Neighbor (cam-space) normals at the same projected pixels
+                sample_normals = sample_map(sample_pixels, normal_nea)  # [M, 3]
+
+            # Discard samples failing occlussion check and invalid depths
+            queried_depths = pts_cam_nea[valid_proj][:, 2] # [M,]
+            sampled_depths = sample_depths[:, 0]           # [M,]
+            valid_occ_proj = (
+                (sampled_depths > 1e-6) &
+                (queried_depths - sampled_depths <= self.occlusion_th)
+            ) # [M,]
+
+            # Subindex into valid_proj_indices
+            survived_indices = valid_proj_indices[valid_occ_proj]  # [N]
+            pixels_nea_valid = sample_pixels[valid_occ_proj]       # [N, 2]
+            depths_nea_valid = sample_depths[valid_occ_proj]       # [N, 1]
+
+            # Back-project to camera points of nearest view using sampled values
+            fx_nea, fy_nea = cam_nea_params["fx"], cam_nea_params["fy"]
+            cx_nea, cy_nea = cam_nea_params["cx"], cam_nea_params["cy"]
+            pts_cam_nea_recon = torch.stack(
+                [
+                    (pixels_nea_valid[:, 0] - cx_nea) / fx_nea * depths_nea_valid[:, 0],
+                    (pixels_nea_valid[:, 1] - cy_nea) / fy_nea * depths_nea_valid[:, 0],
+                    depths_nea_valid[:, 0],
+                ],
+                dim=-1,
+            ) # [N, 3]
+
+            # Find the corresponding camera points in reference view
+            pts_cam_ref_recon = pts_cam_nea_recon @ R_nea_to_ref + t_nea_to_ref                                # [N, 3]
+            pts_reprojections = pts_cam_ref_recon[..., :2] / torch.clamp_min(pts_cam_ref_recon[..., 2:], 1e-6) # [N, 2]
+            pts_reprojections = torch.addcmul(
+                pts_reprojections.new_tensor([cx_ref, cy_ref]),
+                pts_reprojections.new_tensor([fx_ref, fy_ref]),
+                pts_reprojections,
+            ) # [N, 2]
+
+            # Reference pixel coordinates for the N survivors
+            pixel_f = pixel_grid_flat[survived_indices]                       # [N, 2]
+            pixel_noise = torch.pairwise_distance(pts_reprojections, pixel_f) # [N,]
+            valid_noise = pixel_noise < self.pixel_noise_th                   # [N,] booleans, P trues
+
+            if not valid_noise.any():
+                zero_tensor = torch.tensor(0.0, dtype=torch.float32, device=self.device)
+                return zero_tensor, zero_tensor
+
+        with torch.no_grad():
+            weights_geo = torch.exp(-pixel_noise * self.geo_exponential_decay)  # [N,]
+            weights_geo[~valid_noise] = 0.0
+
+        if self.optimize_geo:
+            Lgeo = (weights_geo * pixel_noise).mean()
+            # Multi-view normal consistency: angular error between the reference and the
+            # neighbor surface normals at the matched 3D points. Both render_normals are
+            # camera-space, so rotate each to world (n_world = n_cam @ R.T) before comparing.
+            if compute_angle:
+                n_ref = normal_ref.reshape(-1, 3)[survived_indices]  # [N, 3] cam-space (ref)
+                n_ref = F.normalize(n_ref @ R_ref.T, dim=-1)         # -> world, unit
+                n_nea = sample_normals[valid_occ_proj]               # [N, 3] cam-space (nea, detached)
+                n_nea = F.normalize(n_nea @ R_nea.T, dim=-1)         # -> world, unit
+                cos_sim = (n_ref * n_nea).sum(-1).clamp(-1 + 1e-6, 1 - 1e-6)  # [N]
+                angle_error = torch.acos(cos_sim)                    # [N, ], radians
+                angle_valid = angle_error < self.angle_noise_th      # [N, ]
+                if angle_valid.any():
+                    angle_noise = self.angle_factor * angle_error
+                    Lgeo += (weights_geo * angle_noise)[angle_valid].mean()
+        else:
+            Lgeo = torch.tensor(0.0, dtype=torch.float32, device=self.device)
+
+        if not self.optimize_ncc:
+            zero_tensor = torch.tensor(0.0, dtype=torch.float32, device=self.device)
+            return zero_tensor, Lgeo
+
+        # Lncc
+        with torch.no_grad():
+            # Only keep the P pixels that also passed the noise threshold
+            final_indices = survived_indices[valid_noise]         # [P,]
+            weights_ncc   = torch.exp(-pixel_noise)[valid_noise]  # [P,]
+
+            # Cap samples for NCC to save computation — applied here only,
+            # geo loss above already used all N survivors unrestricted
+            if self.max_num_samples > 0 and final_indices.shape[0] > self.max_num_samples:
+                chosen = torch.randperm(
+                    final_indices.shape[0], device=self.device
+                )[: self.max_num_samples]
+                final_indices = final_indices[chosen]
+                weights_ncc   = weights_ncc[chosen]
+
+            # Recover 2D integer pixel coords for warp_patch_ncc
+            pixels_ref_ncc = pixel_grid_flat[final_indices].int()  # [P, 2]
+
+        depth_ref_select = torch.index_select(depth_ref.reshape(-1), dim=0, index=final_indices)         # [P,]
+        normal_ref_ = normal_ref.squeeze(0).permute(2, 0, 1)  # [3, H, W] 
+        normal_ref_select = torch.index_select(normal_ref_.reshape(3, -1).T, dim=0, index=final_indices) # [P, 3]
+        normal_ref_select = F.normalize(normal_ref_select, dim=-1)
+
+        gray_ref = data_ref["gray"].to(self.device).squeeze() / 255.0  # [H, W]
+        gray_nea = data_nea["gray"].to(self.device).squeeze() / 255.0  # [H, W] 
+
+        cc, valid_mask = warp_patch_ncc(
+            depth_ref_select,
+            normal_ref_select,
+            pixels_ref_ncc,
+            R_ref_to_nea,
+            t_ref_to_nea,
+            gray_ref,
+            gray_nea,
+            fx_ref, fy_ref, cx_ref, cy_ref,
+            fx_nea, fy_nea, cx_nea, cy_nea,
+        )
+
+        ncc = torch.clamp(1 - cc, 0.0, 2.0).squeeze()  # [P,]
+        ncc_mask = (ncc < 0.9) & valid_mask.squeeze()  # [P,]
+        ncc = ncc * weights_ncc
+        ncc = ncc[ncc_mask]
+
+        if ncc_mask.any():
+            Lncc = ncc.mean()
+        else:
+            Lncc = torch.tensor(0.0, dtype=torch.float32, device=self.device)
+
+        return Lncc, Lgeo
+
+
+def cam_params_from_data_batch(data_batch):
+    gt_image = data_batch["image"].squeeze() # [H, W, 3]
+    K = data_batch["K"].squeeze()            # [3, 3]
+    H, W = gt_image.shape[:2]
+    fx = K[0, 0]
+    fy = K[1, 1]
+    cx = K[0, 2]
+    cy = K[1, 2]
+    return { "H": H, "W": W, "fx": fx, "fy": fy, "cx": cx, "cy": cy }
+
+
+def sample_map(pixels, target):
+    """
+    Perform grid sampling into target at pixels
+    Args:
+        pixels: image coordinates to sample the target, shape [M, 2]
+        target: the sample target, shape [1, H, W, C]
+
+    Returns:
+        sample values of shape [M, C]
+    """
+
+    w, h = target.shape[1:3]
+    normalized_pixels = torch.stack(
+        [
+            pixels[:, 0] / (w - 1) * 2 - 1,
+            pixels[:, 1] / (h - 1) * 2 - 1,
+        ],
+        dim=-1,
+    ) # [M, 2], normalize to [-1, 1]
+
+    # Prepare for grid sampling
+    input = target.permute(0, 3, 1, 2)          # [1, C, H, W]
+    grid  = normalized_pixels[None, :, None, :] # [1, M, 1, 2]
+
+    # Bilinear sampling
+    samples = F.grid_sample(input, grid, mode="bilinear", align_corners=True)  # [1, C, M, 1]
+    samples = samples.squeeze(0).squeeze(-1)  # [C, M]
+    samples = samples.transpose(0, 1)         # [M, C]
+
+    return samples
 
 
 def rotation_6d_to_matrix(d6: Tensor) -> Tensor:

@@ -1,6 +1,7 @@
 import json
 import math
 import os
+import random
 import sys
 import time
 
@@ -18,7 +19,6 @@ import yaml
 import numpy as np
 import torch
 import torch.nn.functional as F
-
 import open3d as o3d
 
 from torch import Tensor
@@ -42,8 +42,8 @@ from fused_ssim import fused_ssim
 from .datasets import Dataset, get_parser
 from .datasets.traj import generate_ellipse_path_z, generate_interpolated_path, generate_spiral_path
 from .utils import (
-    AppearanceOptModule, CameraOptModule, knn, rgb_to_sh, set_random_seed,
-    fix_normal_coordinates, image_grad_weight
+    AppearanceOptModule, CameraOptModule, PatchMatch,
+    knn, rgb_to_sh, set_random_seed, fix_normal_coordinates, image_grad_weight
 )
 
 
@@ -94,10 +94,12 @@ class Config:
     num_offset_frames: int = 0
     # Load frames at this interval for certain datasets
     num_stride_frames: int = 1
-    # The image directory name in COLMAP datasets
+    # The image directory name in COLMAP datasets under data_dir
     colmap_image_dir: str = "images"
     # Trim this many of starting characters from each COLMAP image file name stored in its database
     colmap_image_name_offset: int = 0
+    # How many workers to process images in parallel, None to use all CPUs available
+    image_process_workers: Optional[int] = None
 
     # Port for the viewer server
     port: int = 8080
@@ -179,7 +181,7 @@ class Config:
     scale_reg: float = 0.0
     # Alpha regularization, 0 to disable
     alpha_reg: float = 0.0
-    # Enforce disk-like Gaussians, 0 to disable
+    # Enforce disk-like 3D Gaussians, 0 to disable
     planar_reg: float = 0.0
 
     # Enable camera optimization.
@@ -231,6 +233,43 @@ class Config:
     depth_normal_lambda: float = 0.0
     # Start applying depth normal consistency loss from this step (only applies when depth_normal_lambda > 0)
     depth_normal_loss_from_step: int = 7000
+
+    # Multi-view photometric consistency, 0 to disable
+    multi_view_ncc_lambda: float = 0.0
+    # Multi-view geometric consistency, 0 to disable
+    multi_view_geo_lambda: float = 0.0
+    # Start applying multi-view photometric and geometric consistency losses from this step
+    multi_view_loss_from_iter: int = 7000
+    # Compute and apply multi-view losses every this number, increase to cut down training time
+    multi_view_loss_every: int = 1
+    # The maximum number of nearest neighbors to consider for mutli-view losses
+    multi_view_nearest_max_num: int = 8
+    # Only neighbor views whose angular difference within this degree are valid for multi-view neighbor selection
+    multi_view_nearest_max_angle: float = 30
+    # Only neighbor views whose displacement greater than this value (m) are valid for multi-view neighbor selection
+    multi_view_nearest_min_dis: float = 0.01
+    # Only neighbor views whose displacement within this value (m) are valid for multi-view neighbor selection
+    multi_view_nearest_max_dis: float = 1.5
+    # The forward ray convention (0: +x, 1: +y, 2: +z)
+    multi_view_forward_ray_idx: int = 2
+    # The threshold beyond which reprojected pixel errors are considered noise, smaller numbers discard more pixels
+    multi_view_pixel_noise_threshold: float = 1.0
+    # The threshold beyond which sampled depths in neighbor views are considered occluded, smaller numbers discard more samples
+    multi_view_occlusion_threshold: float = 5e-4
+    # Multi-view normal consistency (part of the geo loss): scales the per-point angular error
+    # between reference and neighbor normals; 0 to disable. Requires multi_view_geo_lambda > 0.
+    multi_view_angle_factor: float = 1.0
+    # How rapidly the weights for multi-view geometric consistency decay due to reprojection noises
+    mutli_view_geo_exponential_decay: float = 3.0
+    # Only neighbor normals within this angular difference (degrees) contribute to the normal loss
+    multi_view_angle_noise_threshold: float = 30.0
+    # The maximum number of depth values to sample from nearest views in mutli-view losses, 0 to use all
+    multi_view_max_num_samples: int = 0
+    # Reuse each view's render (cached from when it was the main render) for the neighbor instead of
+    # rendering it again. Avoids the extra rasterization. Assumes pose_opt/pose_noise are off.
+    multi_view_cache: bool = True
+    # Max age (in steps) of a cached neighbor render before it is re-rendered; -1 = no limit
+    multi_view_cache_max_age: int = -1
 
     # Dump information to tensorboard every this steps
     tb_every: int = 100
@@ -389,6 +428,57 @@ def create_splats_with_optimizers(
     return splats, optimizers
 
 
+def compute_nearest_indices(
+    dataset: Dataset,
+    nearest_num: int,
+    nearest_max_angle: float,
+    nearest_min_dis: float,
+    nearest_max_dis: float,
+    forward_ray_idx: int, # 0 for x, 1 for y, 2 for z
+):
+    print(f"[>] Populating nearest camera indices for {len(dataset)} views")
+    c2w_mats = dataset.parser.camtoworlds  # [total_N, 4, 4], numpy
+    centers  = c2w_mats[:, :3, 3]          # [total_N, 3]
+
+    # Forward ray in cam space rotated to world space
+    forward_rays = c2w_mats[:, :3, forward_ray_idx]        # [total_N, 3]
+    norms = np.linalg.norm(forward_rays, axis=-1, keepdims=True)
+    forward_rays = forward_rays / np.maximum(norms, 1e-8)  # [total_N, 3]
+
+    # Map dataset item index to a list of parser-level indices
+    nearest_ids: dict[int, list[int]] = {}
+    nearst_cnt = 0
+    for item_idx, parser_idx in enumerate(dataset.indices):
+        # Pairwise distances from this camera to all others in the split
+        center_i   = centers[parser_idx]       # [3,]
+        ray_i      = forward_rays[parser_idx]  # [3,]
+
+        split_centers = centers[dataset.indices]       # [S, 3]
+        split_rays    = forward_rays[dataset.indices]  # [S, 3]
+
+        dists  = np.linalg.norm(split_centers - center_i, axis=-1)  # [S,]
+        dots   = np.clip(np.sum(split_rays * ray_i, axis=-1), -1.0, 1.0)
+        angles = np.degrees(np.arccos(dots))                        # [S,]
+
+        # Sort by distance primarily, angle as tiebreaker
+        sorted_indices = np.lexsort((angles, dists))  # indices into self.indices
+
+        mask = (
+            (angles[sorted_indices] < nearest_max_angle) &
+            (dists[sorted_indices]  > nearest_min_dis)   &
+            (dists[sorted_indices]  < nearest_max_dis)   &
+            (sorted_indices != item_idx)  # exclude self
+        )
+        sorted_indices = sorted_indices[mask]
+        top_k = sorted_indices[:nearest_num]
+        indices = top_k.tolist() # indices into dataset.indices
+        nearest_ids[item_idx] = indices
+        nearst_cnt += len(indices)
+
+    print(f"[>] Average nearest cameras per-view: {nearst_cnt / len(nearest_ids):.1f}")
+    return nearest_ids
+
+
 class Runner:
     """Engine for training and testing."""
 
@@ -443,12 +533,22 @@ class Runner:
             patch_size=cfg.patch_size,
             load_point_depth=cfg.depth_point_lambda > 0.0,
             load_image_depth=cfg.depth_image_lambda > 0.0,
+            load_image_gray=cfg.multi_view_ncc_lambda > 0.0,
+        )
+        self.trainset_nearest_indices = compute_nearest_indices(
+            dataset=self.trainset,
+            nearest_num=cfg.multi_view_nearest_max_num,
+            nearest_max_angle=cfg.multi_view_nearest_max_angle,
+            nearest_min_dis=cfg.multi_view_nearest_min_dis,
+            nearest_max_dis=cfg.multi_view_nearest_max_dis,
+            forward_ray_idx=cfg.multi_view_forward_ray_idx,
         )
         self.valset = Dataset(
             self.parser,
             split="val",
             load_image_depth=cfg.depth_image_lambda > 0.0,
         )
+
         self.scene_scale = self.parser.scene_scale * 1.1 * cfg.global_scale
         print("[>] Scene half extent:", self.scene_scale)
 
@@ -700,12 +800,30 @@ class Runner:
         # Track if Gaussians are frozen (for controller distillation)
         self._gaussians_frozen = False
 
+        # Decide which features to rasterize per frame
         drm_to_rm = {
             "z": "RGB+D",
             "z_mean": "RGB+ED",
             "plane": "RGB+PD",
         }
         self.render_mode = drm_to_rm[cfg.depth_render_mode] if cfg.depth_render_mode is not None else "RGB"
+
+        # Patch matching module for multi-view consistency losses
+        self.pm = PatchMatch(
+            pixel_noise_threshold=cfg.multi_view_pixel_noise_threshold,
+            occlusion_threshold=cfg.multi_view_occlusion_threshold,
+            max_num_samples=cfg.multi_view_max_num_samples,
+            angle_factor=cfg.multi_view_angle_factor,
+            angle_noise_threshold=cfg.multi_view_angle_noise_threshold,
+            geo_exponential_decay=cfg.mutli_view_geo_exponential_decay,
+            optimize_ncc=cfg.multi_view_ncc_lambda > 0.0,
+            optimize_geo=cfg.multi_view_geo_lambda > 0.0,
+            device=self.device,
+        )
+
+        # Store image_id -> {"depth": [1, H, W, 1], "normal": [1, H, W, 3], "step": int}
+        # for the multi-view render cache, cutting down training time.
+        self.multi_view_cache = {}
 
     def freeze_gaussians(self):
         """Freeze all Gaussian parameters for controller distillation.
@@ -737,9 +855,7 @@ class Runner:
         **kwargs,
     ) -> Tuple[Tensor, Tensor, Dict]:
         means = self.splats["means"]  # [N, 3]
-        # quats = F.normalize(self.splats["quats"], dim=-1)  # [N, 4]
-        # rasterization does normalization internally
-        quats = self.splats["quats"]  # [N, 4]
+        quats = self.splats["quats"]  # [N, 4], will be normalized internally
         scales = torch.exp(self.splats["scales"])  # [N, 3]
         opacities = torch.sigmoid(self.splats["opacities"])  # [N,]
 
@@ -963,6 +1079,15 @@ class Runner:
             else:
                 colors, depths = renders, None
 
+            # Cache this view's render (depth + normal) so it can be reused as a neighbor
+            # later, sparing the extra nearest-view render in the multi-view loss.
+            if cfg.multi_view_cache and depths is not None:
+                self.multi_view_cache[data["image_id"].item()] = {
+                    "depth":  depths.detach(),
+                    "normal": info["render_normals_c"].detach() if "render_normals_c" in info else None,
+                    "step":   step,
+                }
+
             if cfg.random_bkgd:
                 bkgd = torch.rand(1, 3, device=device)
                 colors = colors + bkgd * (1.0 - alphas)
@@ -984,7 +1109,8 @@ class Runner:
             depth_loss = 0.0
 
             # Supervise rendered depths with prior depth points
-            if cfg.depth_point_lambda > 0.0 and step >= cfg.depth_point_loss_from_step:
+            depth_point_kicked_in = cfg.depth_point_lambda > 0.0 and step >= cfg.depth_point_loss_from_step
+            if depth_point_kicked_in:
                 depth_pixels = data["depth_pixels"].to(device) # [1, M, 2]
                 depth_values = data["depth_values"].to(device) # [1, M]
 
@@ -997,10 +1123,10 @@ class Runner:
                     dim=-1,
                 ) # normalize to [-1, 1]
                 grid = depth_pixels.unsqueeze(2)  # [1, M, 1, 2]
-                depths = F.grid_sample(depths.permute(0, 3, 1, 2), grid, align_corners=True)  # [1, 1, M, 1]
-                depths = depths.squeeze(3).squeeze(1)  # [1, M]
+                sampled_depths = F.grid_sample(depths.permute(0, 3, 1, 2), grid, align_corners=True)  # [1, 1, M, 1]
+                sampled_depths = sampled_depths.squeeze(3).squeeze(1)  # [1, M]
                 # calculate loss in disparity space
-                disp = torch.where(depths > 0.0, 1.0 / depths, torch.zeros_like(depths))
+                disp = torch.where(sampled_depths > 0.0, 1.0 / sampled_depths, torch.zeros_like(sampled_depths))
                 disp_gt = 1.0 / depth_values  # [1, M]
 
                 depth_point_loss = F.l1_loss(disp, disp_gt) * self.scene_scale
@@ -1008,7 +1134,8 @@ class Runner:
                 loss += cfg.depth_point_lambda * depth_point_loss
 
             # Supervise rendered depths with prior depth images, assumming both have the same scale
-            if cfg.depth_image_lambda > 0.0 and step >= cfg.depth_image_loss_from_step:
+            depth_image_kicked_in = cfg.depth_image_lambda > 0.0 and step >= cfg.depth_image_loss_from_step
+            if depth_image_kicked_in:
                 depth_image = data["depth_image"].to(device) # [1, H, W, 1]
                 depth_valid_mask = (depth_image > 0) & (depth_image < cfg.depth_image_max_distance) & (depths > 0)
                 if depth_valid_mask.any():
@@ -1017,7 +1144,8 @@ class Runner:
                     loss += cfg.depth_image_lambda * depth_image_loss
 
             # Depth-normal consistency
-            if cfg.depth_normal_lambda > 0.0 and step >= cfg.depth_normal_loss_from_step:
+            depth_normal_kicked_in = cfg.depth_normal_lambda > 0.0 and step >= cfg.depth_normal_loss_from_step
+            if depth_normal_kicked_in:
                 weights = (1.0 - image_grad_weight(gt_image)).clamp(0, 1).detach() ** 2  # [..., H, W, 1]
                 weights = weights.unsqueeze(-4)            # [..., 1, H, W, 1]
                 render_normals = info["render_normals_c"]  # [..., C, H, W, 3]
@@ -1033,6 +1161,71 @@ class Runner:
                 depth_normal_loss = ((weights * diff).sum() / (weights.sum() + 1e-6))
                 depth_loss += depth_normal_loss.item()
                 loss += cfg.depth_normal_lambda * depth_normal_loss
+
+            # Multi-view loss
+            ncc_loss, geo_loss, mv_loss = 0.0, 0.0, 0.0
+            multi_view_kicked_in = (cfg.multi_view_geo_lambda > 0.0 
+                or cfg.multi_view_ncc_lambda > 0.0) and step >= cfg.multi_view_loss_from_iter
+            if step % cfg.multi_view_loss_every == 0 and multi_view_kicked_in:
+                nearest_indices = self.trainset_nearest_indices[data["image_id"].item()]
+                if len(nearest_indices) > 0:
+                    # Rendered depth as observed in nearest camera image plane.
+                    # We need to create batch dim for data_nearest because we
+                    # randomly index into the dataset class, not via data loader.
+                    data_nearest = self.trainset[random.choice(nearest_indices)]
+                    id_nea = data_nearest["image_id"]
+                    normals = info["render_normals_c"]  # [1, H, W, 3]
+
+                    # Try to reuse the neighbor's render from when it was last a main view,
+                    # avoiding a second full rasterization. We cache both depth and normal:
+                    # depth is used now, normal is reserved for nearest-view normal consistency.
+                    cached = self.multi_view_cache.get(id_nea) if cfg.multi_view_cache else None
+                    cache_hit = cached is not None and (
+                        cfg.multi_view_cache_max_age < 0
+                        or step - cached["step"] <= cfg.multi_view_cache_max_age
+                    )
+                    if cache_hit:
+                        depths_nearest = cached["depth"]
+                        normals_nearest = cached["normal"]
+                    else:
+                        c2w_nea = data_nearest["camtoworld"].unsqueeze(0).to(device)  # [1, 4, 4]
+                        K_nea   = data_nearest["K"].unsqueeze(0).to(device)           # [1, 3, 3]
+                        H_nea, W_nea = data_nearest["image"].shape[:2]
+                        image_id_nea = torch.tensor([id_nea], device=device).unsqueeze(0)
+                        cam_idcs_nea = torch.tensor([data_nearest["camera_idx"]], device=device).unsqueeze(0)
+                        masks_nea = data_nearest["mask"].unsqueeze(0).to(device) if "mask" in data_nearest else None  # [1, H, W]
+
+                        with torch.no_grad():
+                            depths_nearest, _, info_nearest = self.rasterize_splats(
+                                camtoworlds=c2w_nea,
+                                Ks=K_nea,
+                                width=W_nea,
+                                height=H_nea,
+                                sh_degree=sh_degree_to_use,
+                                near_plane=cfg.near_plane,
+                                far_plane=cfg.far_plane,
+                                image_ids=image_id_nea,
+                                render_mode="PD",  # render depth only
+                                masks=masks_nea,
+                                frame_idcs=image_id_nea,
+                                camera_idcs=cam_idcs_nea,
+                            )
+
+                        normals_nearest = info_nearest["render_normals_c"]  # [1, H, W, 3]
+                        if cfg.multi_view_cache:
+                            self.multi_view_cache[id_nea] = {
+                                "depth":  depths_nearest.detach(),
+                                "normal": normals_nearest.detach(),
+                                "step":   step,
+                            }
+
+                    Lncc, Lgeo = self.pm(data, data_nearest, depths, depths_nearest, normals, normals_nearest)
+                    multi_view_loss = cfg.multi_view_ncc_lambda * Lncc + cfg.multi_view_geo_lambda * Lgeo
+
+                    ncc_loss, geo_loss = Lncc, Lgeo
+                    mv_loss = multi_view_loss.item()
+
+                    loss += multi_view_loss
 
             # Post-processing losses
             if cfg.post_processing == "bilateral_grid":
@@ -1076,8 +1269,11 @@ class Runner:
                 postfix_dict = { 
                     "SH": f"{sh_degree_to_use}",
                     "Loss": f"{loss.item():.5f}",
-                    "Ldepth": f"{depth_loss:.5f}"
                 }
+                if depth_point_kicked_in or depth_image_kicked_in or depth_normal_kicked_in:
+                    postfix_dict["Ldepth"] = f"{depth_loss:.5f}"
+                if multi_view_kicked_in:
+                    postfix_dict["Lmv"] = f"{mv_loss:.5f}"
                 n_points = len(self.splats["means"])
                 postfix_dict["Points"] = f"{n_points}"
                 if cfg.pose_opt and cfg.pose_noise:
@@ -1094,6 +1290,9 @@ class Runner:
                 self.writer.add_scalar("train/num_GS", len(self.splats["means"]), step)
                 self.writer.add_scalar("train/mem", mem, step)
                 self.writer.add_scalar("train/Ldepth", depth_loss, step)
+                self.writer.add_scalar("train/Lmv", mv_loss, step)
+                self.writer.add_scalar("train/Lncc", ncc_loss, step)
+                self.writer.add_scalar("train/Lgeo", geo_loss, step)
                 if cfg.post_processing is not None:
                     self.writer.add_scalar(
                         "train/post_processing_reg_loss",

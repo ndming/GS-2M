@@ -116,6 +116,15 @@ def extract_features_and_mapping(colmap_exec, args: Args):
 
     # Bundle adjustment
     if args.use_global_mapper:
+        if params == "":
+            calibrator_cmd = (
+                f"{colmap_exec} view_graph_calibrator "
+                f"--database_path {db_path}"
+            )
+            exit_code = os.system(calibrator_cmd)
+            if exit_code != 0:
+                print(f"[!] View graph calibrator failed with code {exit_code}. Exiting...")
+                exit(exit_code)
         mapper_cmd = (
             f"{colmap_exec} global_mapper "
             f"--database_path {db_path} "
@@ -130,11 +139,11 @@ def extract_features_and_mapping(colmap_exec, args: Args):
             f"--image_path {img_path} "
             f"--output_path {out_path} "
             f"--Mapper.ba_use_gpu 1 "
-            f"--Mapper.ba_global_function_tolerance 1e-6"
+            # f"--Mapper.ba_global_function_tolerance 1e-6"
         )
     exit_code = os.system(mapper_cmd)
     if exit_code != 0:
-        print(f"[!] Global mapper failed with code {exit_code}. Exiting...")
+        print(f"[!] Global BA failed with code {exit_code}. Exiting...")
         exit(exit_code)
 
 
@@ -212,8 +221,8 @@ def sample_from_video_file(video_file, interval, output_dir):
     frame_count  = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
     total_frames = frame_count // interval
 
-    print(f"Found {len(frame_count)}, sampling every {interval} frames")
-    with tqdm(total=total_frames, desc="Extracting frames") as pbar:
+    print(f"[>] Found {frame_count}, sampling every {interval} frames")
+    with tqdm(total=total_frames, desc="[>] Extracting frames") as pbar:
         frame_count   = 0
         extract_count = 0
         

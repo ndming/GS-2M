@@ -9,7 +9,7 @@ SCENES = [24, 37, 40, 55, 63, 65, 69, 83, 97, 105, 106, 110, 114, 118, 122]
 MAX_STEPS = 30000
 
 
-def run(base_dir, out_dir, strategy, postfix):
+def run(base_dir, out_dir, postfix):
     psnr = 0.0
     ssim = 0.0
     pips = 0.0
@@ -25,13 +25,12 @@ def run(base_dir, out_dir, strategy, postfix):
         result_dir = out_dir / out_dir_name
 
         # Train
-        opt = f"--data-factor 2 --save-steps {MAX_STEPS} --save-ply --eval-steps {MAX_STEPS} --depth-render-mode plane"
-        etc = f"--disable-viewer --disable-video --no-normalize-world-space --traj-num-interps 8"
-        reg = f"--planar-reg 100 --depth-normal-lambda 0.015"
-        if strategy == "mcmc":
-            opt = f"{opt} --scale-reg 0.01 --opacity-reg 0.01 --init-opa 0.5 --init-scale 0.1"
+        opt = f"--data-factor 2 --save-ply --depth-render-mode plane --save-steps {MAX_STEPS} --eval-steps {MAX_STEPS}"
+        etc = f"--disable-viewer --disable-video --traj-num-interps 8 --multi-view-loss-every 4"
+        reg = f"--planar-reg 100 --depth-normal-lambda 0.015 --multi-view-ncc-lambda 0.15 --multi-view-geo-lambda 0.03"
+        den = f"--strategy.absgrad --strategy.grow-grad2d 0.0008 --strategy.grow_scale3d 0.001"
 
-        cmd = f"python train.py {strategy} --data-dir {scene_dir} --result-dir {result_dir} {opt} {reg} {etc}"
+        cmd = f"python train.py default --data-dir {scene_dir} --result-dir {result_dir} {opt} {reg} {etc} {den}"
         print("=" * (len(f"scan{scene}")))
         print(f"scan{scene}")
         print("=" * (len(f"scan{scene}")))
@@ -89,7 +88,7 @@ def run(base_dir, out_dir, strategy, postfix):
         with open(stats_file, 'r') as f:
             stats_data = json.load(f)
 
-    key = strategy if postfix == "" else postfix
+    key = "default" if postfix == "" else postfix
     stats_data[key] = {
         "psnr": avg_psnr,
         "ssim": avg_ssim,
@@ -106,9 +105,8 @@ def run(base_dir, out_dir, strategy, postfix):
 if __name__ == "__main__":
     parser = ArgumentParser()
     parser.add_argument("--data_base_dir", type=str, required=True, help="Directory containig all scenes")
-    parser.add_argument("--densification", type=str, default="default", help="Strategy to use for densification")
     parser.add_argument("-o", "--out_dir", type=str, default="output/dtu", help="Where store all outputs")
-    parser.add_argument("-p", "--postfix", type=str, default="", help="Postfix label for the run (e.g. mcmc)")
+    parser.add_argument("-p", "--postfix", type=str, default="", help="Postfix label for the run")
     args = parser.parse_args()
 
     base_dir = Path(args.data_base_dir).resolve()
@@ -125,10 +123,4 @@ if __name__ == "__main__":
             print(f"[!] Unrecognized scene dir: {scene_dir.name} (expected one of {SCENES})")
             exit(1)
 
-    supported_strategies = ["default", "mcmc"]
-    strategy = args.densification
-    if not strategy in supported_strategies:
-        print(f"[!] Unsupported strategy: {strategy} (expected one of {supported_strategies})")
-        exit(1)
-
-    run(base_dir, out_dir, strategy, args.postfix)
+    run(base_dir, out_dir, args.postfix)

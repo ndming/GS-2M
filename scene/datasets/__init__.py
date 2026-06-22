@@ -31,13 +31,15 @@ class Dataset:
         patch_size: Optional[int] = None,
         load_point_depth: bool = False,
         load_image_depth: bool = False,
+        load_image_gray:  bool = False,
     ):
         self.parser = parser
         self.split = split
         self.patch_size = patch_size
         self.load_point_depth = load_point_depth
         self.load_image_depth = load_image_depth
-        
+        self.load_image_gray  = load_image_gray
+
         indices = np.arange(len(self.parser.image_names))
         if self.parser.test_every <= 0 and split == "train":
             self.indices = indices # get all training images if testing is disabled
@@ -48,10 +50,8 @@ class Dataset:
         else:
             self.indices = indices[indices % self.parser.test_every == 0]
 
-
     def __len__(self):
         return len(self.indices)
-
 
     def __getitem__(self, item: int) -> Dict[str, Any]:
         index = self.indices[item]
@@ -147,5 +147,9 @@ class Dataset:
                 depth = depth[y : y + self.patch_size, x : x + self.patch_size]
 
             data["depth_image"] = torch.from_numpy(depth).float().unsqueeze(-1) # [H, W, 1]
+
+        if self.load_image_gray:
+            gray = 0.299 * image[..., 0] + 0.587 * image[..., 1] + 0.114 * image[..., 2]
+            data["gray"] = torch.from_numpy(gray).float().unsqueeze(-1)  # [H, W, 1]
 
         return data
