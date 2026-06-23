@@ -239,7 +239,7 @@ class Config:
     # Multi-view geometric consistency, 0 to disable
     multi_view_geo_lambda: float = 0.0
     # Start applying multi-view photometric and geometric consistency losses from this step
-    multi_view_loss_from_iter: int = 7000
+    multi_view_loss_from_step: int = 7000
     # Compute and apply multi-view losses every this number, increase to cut down training time
     multi_view_loss_every: int = 1
     # The maximum number of nearest neighbors to consider for mutli-view losses
@@ -255,7 +255,7 @@ class Config:
     # The threshold beyond which reprojected pixel errors are considered noise, smaller numbers discard more pixels
     multi_view_pixel_noise_threshold: float = 1.0
     # The threshold beyond which sampled depths in neighbor views are considered occluded, smaller numbers discard more samples
-    multi_view_occlusion_threshold: float = 5e-4
+    multi_view_occlusion_threshold: float = 2e-4
     # Multi-view normal consistency (part of the geo loss): scales the per-point angular error
     # between reference and neighbor normals; 0 to disable. Requires multi_view_geo_lambda > 0.
     multi_view_angle_factor: float = 2.0
@@ -267,6 +267,16 @@ class Config:
     multi_view_geo_weights_decay_rate: float = 3.0
     # How rapidly multi-view photometrically consistent weights decay as a function of reprojection errors
     multi_view_ncc_weights_decay_rate: float = 1.0
+    # Periodically prune Gaussians seen (unoccluded) by fewer than multi_view_trim_min_views, requires DefaultStrategy
+    multi_view_trim: bool = False
+    # Start applying multi-view trim from this step
+    mutli_view_trim_from_step: int = 7000
+    # Performs multi-view every this training steps
+    multi_view_trim_every: int = 1000
+    # How many views to count a Gaussian as observed in multi_view_trim
+    multi_view_trim_min_views: int = 2
+    # Depth tolerance of the occlusion test, as a fraction of the scene half-extent
+    multi_view_trim_tol: float = 0.01
 
     # Dump information to tensorboard every this steps
     tb_every: int = 100
@@ -808,7 +818,7 @@ class Runner:
         # Patch matching module for multi-view consistency losses
         self.pm = PatchMatch(
             pixel_noise_threshold=cfg.multi_view_pixel_noise_threshold,
-            occlusion_threshold=cfg.multi_view_occlusion_threshold,
+            occlusion_threshold=cfg.multi_view_occlusion_threshold * self.scene_scale,
             max_num_samples=cfg.multi_view_max_num_samples,
             angle_factor=cfg.multi_view_angle_factor,
             angle_noise_threshold=cfg.multi_view_angle_noise_threshold,
@@ -943,6 +953,66 @@ class Runner:
                 )
 
         return render_colors, render_alphas, info
+
+    @torch.no_grad()
+    def _multi_view_observe_trim(self) -> int:
+        """Prune Gaussians observed (unoccluded) by fewer than ``multi_view_trim_min_views``
+        training views — the PGSR/GGGS multi-view observe trim.
+
+        gsplat only exposes frustum visibility (``radii > 0``), which counts occluded
+        Gaussians; instead each Gaussian center is tested against the per-view rendered depth,
+        so a single-view floater (in many frusta but occluded in all but one) is trimmed.
+        """
+        from gsplat.strategy.ops import remove
+
+        cfg = self.cfg
+        device = self.device
+        means = self.splats["means"]                       # [N, 3]
+        observe_cnt = torch.zeros(means.shape[0], device=device)
+        tol = cfg.multi_view_trim_tol * self.scene_scale
+
+        depth_render_mode = "D"  # default to accumulated depth
+        if "ED" in self.render_mode:
+            depth_render_mode = "ED"
+        elif "PD" in self.render_mode:
+            depth_render_mode = "PD"
+
+        for data in self.trainset:
+            c2w = data["camtoworld"].to(device)  # [4, 4]
+            K   = data["K"].to(device)           # [3, 3]
+            H, W = data["image"].shape[:2]
+            R, t = c2w[:3, :3], c2w[:3, 3]
+
+            renders, _, _ = self.rasterize_splats(
+                camtoworlds=c2w[None], Ks=K[None], width=W, height=H,
+                sh_degree=cfg.sh_degree, near_plane=cfg.near_plane,
+                far_plane=cfg.far_plane, render_mode=depth_render_mode,
+            )
+            depth = renders[..., -1:].permute(0, 3, 1, 2)   # [1, 1, H, W]
+
+            # Project Gaussian centers into this view (world -> cam -> pixel)
+            Xc = (means - t) @ R                            # [N, 3]
+            z  = Xc[:, 2]
+            uv = Xc @ K.T                                   # [N, 3]
+            u  = uv[:, 0] / uv[:, 2].clamp_min(1e-6)
+            v  = uv[:, 1] / uv[:, 2].clamp_min(1e-6)
+            in_view = (z > cfg.near_plane) & (u >= 0) & (u < W) & (v >= 0) & (v < H)
+
+            # Bilinearly sample the rendered surface depth at the projected pixels
+            grid = torch.stack([u / (W - 1) * 2 - 1, v / (H - 1) * 2 - 1], dim=-1)
+            d_surf = F.grid_sample(
+                depth, grid[None, :, None, :], mode="bilinear",
+                padding_mode="border", align_corners=True,
+            )[0, 0, :, 0]                                   # [N]
+
+            # A center at or in front of the surface is visible (not occluded behind it)
+            observe_cnt += (in_view & (z <= d_surf + tol)).float()
+
+        prune_mask = observe_cnt < cfg.multi_view_trim_min_views
+        n_prune = int(prune_mask.sum())
+        if n_prune > 0:
+            remove(self.splats, self.optimizers, self.strategy_state, prune_mask)
+        return n_prune
 
     def train(self):
         cfg = self.cfg
@@ -1154,7 +1224,7 @@ class Runner:
             # Multi-view loss
             ncc_loss, geo_loss = 0.0, 0.0
             multi_view_kicked_in = (cfg.multi_view_geo_lambda > 0.0 
-                or cfg.multi_view_ncc_lambda > 0.0) and step >= cfg.multi_view_loss_from_iter
+                or cfg.multi_view_ncc_lambda > 0.0) and step >= cfg.multi_view_loss_from_step
             if step % cfg.multi_view_loss_every == 0 and multi_view_kicked_in:
                 nearest_indices = self.trainset_nearest_indices[data["image_id"].item()]
                 if len(nearest_indices) > 0:
@@ -1401,6 +1471,16 @@ class Runner:
                 )
             else:
                 assert_never(self.cfg.strategy)
+
+            # Multi-view observe trim: drop Gaussians unobserved by enough views (densify phase)
+            if (cfg.multi_view_trim
+                    and isinstance(self.cfg.strategy, DefaultStrategy)
+                    and step >= cfg.mutli_view_trim_from_step
+                    and step < self.cfg.strategy.refine_stop_iter
+                    and step % cfg.multi_view_trim_every == 0):
+                n_trim = self._multi_view_observe_trim()
+                # if n_trim > 0 and world_rank == 0:
+                #     tqdm.write(f"[>] Multi-view trim at {step}: pruned {n_trim}, {len(self.splats['means'])} remain")
 
             # eval the full set
             if step in [i + self.ckpt_step for i in cfg.eval_steps]:
