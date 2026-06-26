@@ -32,6 +32,7 @@ class Dataset:
         load_point_depth: bool = False,
         load_image_depth: bool = False,
         load_image_gray:  bool = False,
+        load_image_normal: bool = False,
     ):
         self.parser = parser
         self.split = split
@@ -39,6 +40,7 @@ class Dataset:
         self.load_point_depth = load_point_depth
         self.load_image_depth = load_image_depth
         self.load_image_gray  = load_image_gray
+        self.load_image_normal = load_image_normal
 
         indices = np.arange(len(self.parser.image_names))
         if self.parser.test_every <= 0 and split == "train":
@@ -151,5 +153,30 @@ class Dataset:
         if self.load_image_gray:
             gray = 0.299 * image[..., 0] + 0.587 * image[..., 1] + 0.114 * image[..., 2]
             data["gray"] = torch.from_numpy(gray).float().unsqueeze(-1)  # [H, W, 1]
+
+        if self.load_image_normal:
+            if not hasattr(self.parser, "normal_paths") or self.parser.normal_paths is None:
+                raise ValueError(f"The current scene loader ({self.parser.__class__.__name__}) does not support image normals")
+
+            # StableNormal (like DSINE/Omnidata/Marigold) outputs camera-space normals in the
+            # OpenGL convention (+Y up, +Z toward viewer). gsplat's render_normals_c is OpenCV
+            # camera space (+Y down, +Z into the scene), so flip Y and Z to align the frames.
+            normal = imageio.imread(self.parser.normal_paths[index])[..., :3]
+            normal = normal.astype(np.float32) / 255.0 * 2.0 - 1.0   # decode RGB -> [-1, 1]
+            normal[..., 1] *= -1.0
+            normal[..., 2] *= -1.0
+
+            if len(params) > 0:
+                # Undistort to match the (undistorted) image, mirroring the depth path
+                normal = cv2.remap(normal, mapx, mapy, cv2.INTER_LINEAR)
+                normal = normal[y : y + h, x : x + w]
+
+            if self.patch_size is not None:
+                normal = normal[y : y + self.patch_size, x : x + self.patch_size]
+
+            # Renormalize: resize/remap interpolation breaks unit norm
+            norm = np.linalg.norm(normal, axis=-1, keepdims=True)
+            normal = normal / np.clip(norm, 1e-6, None)
+            data["normal_image"] = torch.from_numpy(normal).float()  # [H, W, 3]
 
         return data

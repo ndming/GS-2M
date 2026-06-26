@@ -98,6 +98,8 @@ class Config:
     colmap_image_dir: str = "images"
     # Trim this many of starting characters from each COLMAP image file name stored in its database
     colmap_image_name_offset: int = 0
+    # Rotate COLMAP's native world up to +Z so the world is Z-up, do NOT combine with normalize_world_space
+    colmap_z_up: bool = False
     # How many workers to process images in parallel, None to use all CPUs available
     image_process_workers: Optional[int] = None
 
@@ -234,6 +236,11 @@ class Config:
     # Start applying depth normal consistency loss from this step (only applies when depth_normal_lambda > 0)
     depth_normal_loss_from_step: int = 7000
 
+    # Supervise rendered normals with monocular GT camera-space normals (e.g. StableNormal), 0 to disable.
+    normal_image_lambda: float = 0.0
+    # Start applying the GT-normal loss from this step (only applies when normal_image_lambda > 0)
+    normal_image_loss_from_step: int = 7000
+
     # Multi-view photometric consistency, 0 to disable
     multi_view_ncc_lambda: float = 0.0
     # Multi-view geometric consistency, 0 to disable
@@ -303,6 +310,9 @@ class Config:
         self.depth_point_loss_from_step  = int(self.depth_point_loss_from_step  * factor)
         self.depth_image_loss_from_step  = int(self.depth_image_loss_from_step  * factor)
         self.depth_normal_loss_from_step = int(self.depth_normal_loss_from_step * factor)
+        self.normal_image_loss_from_step = int(self.normal_image_loss_from_step * factor)
+        self.multi_view_loss_from_step   = int(self.multi_view_loss_from_step   * factor)
+        self.mutli_view_trim_from_step   = int(self.mutli_view_trim_from_step   * factor)
 
         strategy = self.strategy
         if isinstance(strategy, DefaultStrategy):
@@ -533,6 +543,8 @@ class Runner:
             exposure_bias=cfg.exposure_bias,
             colmap_image_dir=cfg.colmap_image_dir,
             colmap_image_name_offset=cfg.colmap_image_name_offset,
+            colmap_z_up=cfg.colmap_z_up,
+            load_image_normal=cfg.normal_image_lambda > 0.0,
         )
         self.trainset = Dataset(
             self.parser,
@@ -541,6 +553,7 @@ class Runner:
             load_point_depth=cfg.depth_point_lambda > 0.0,
             load_image_depth=cfg.depth_image_lambda > 0.0,
             load_image_gray=cfg.multi_view_ncc_lambda > 0.0,
+            load_image_normal=cfg.normal_image_lambda > 0.0,
         )
         self.trainset_nearest_indices = compute_nearest_indices(
             dataset=self.trainset,
@@ -1079,7 +1092,7 @@ class Runner:
 
         # Training loop.
         global_tic = time.time()
-        pbar = tqdm(range(init_step, last_step + 1), ncols=128, desc="[>] Training")
+        pbar = tqdm(range(init_step, last_step + 1), desc="[>] Training")
         for step in pbar:
             if not cfg.disable_viewer:
                 while self.viewer.state == "paused":
@@ -1221,6 +1234,24 @@ class Runner:
                 depth_loss += depth_normal_loss.item()
                 loss += cfg.depth_normal_lambda * depth_normal_loss
 
+            # Supervise rendered normals with monocular GT normals (e.g. StableNormal).
+            # Both are camera-space for this view (GT flipped to OpenCV in the dataset),
+            # so compare directly with a cosine loss over the rendered foreground.
+            normal_loss = 0.0
+            normal_image_kicked_in = cfg.normal_image_lambda > 0.0 and step >= cfg.normal_image_loss_from_step
+            if normal_image_kicked_in:
+                gt_normal = data["normal_image"].to(device)   # [1, H, W, 3], camera-space (OpenCV)
+                render_normals = info["render_normals_c"]      # [1, H, W, 3]
+                valid = render_normals.norm(dim=-1, keepdim=True) > 1e-6  # rendered foreground
+                if masks is not None:
+                    valid = valid & masks.unsqueeze(-1)
+                rn = F.normalize(render_normals, dim=-1)
+                gn = F.normalize(gt_normal, dim=-1)
+                cos = (rn * gn).sum(dim=-1, keepdim=True)      # [1, H, W, 1]
+                normal_image_loss = ((1.0 - cos) * valid).sum() / (valid.sum() + 1e-6)
+                normal_loss = normal_image_loss.item()
+                loss += cfg.normal_image_lambda * normal_image_loss
+
             # Multi-view loss
             ncc_loss, geo_loss = 0.0, 0.0
             multi_view_kicked_in = (cfg.multi_view_geo_lambda > 0.0 
@@ -1311,6 +1342,8 @@ class Runner:
                 }
                 if depth_point_kicked_in or depth_image_kicked_in or depth_normal_kicked_in:
                     postfix_dict["Ldepth"] = f"{depth_loss:.5f}"
+                if normal_image_kicked_in:
+                    postfix_dict["Lnormal"] = f"{normal_loss:.5f}"
                 if multi_view_kicked_in:
                     postfix_dict["Lmv"] = f"{self.mv_loss:.5f}"
                 n_points = len(self.splats["means"])
@@ -1332,6 +1365,7 @@ class Runner:
                 self.writer.add_scalar("train/Lmv", self.mv_loss, step)
                 self.writer.add_scalar("train/Lncc", ncc_loss, step)
                 self.writer.add_scalar("train/Lgeo", geo_loss, step)
+                self.writer.add_scalar("train/Lnormal", normal_loss, step)
                 if cfg.post_processing is not None:
                     self.writer.add_scalar(
                         "train/post_processing_reg_loss",

@@ -12,7 +12,7 @@ from typing_extensions import assert_never
 
 from .exif import compute_exposure_from_exif
 from .normalize import align_principal_axes, similarity_from_cameras, transform_cameras, transform_points
-from .utils import process_input_images
+from .utils import process_input_images, process_input_normals
 
 
 class Parser:
@@ -177,6 +177,19 @@ class Parser:
         # colmap_to_image = dict(zip(colmap_files, image_files))
         # image_paths = [os.path.join(processed_image_dir, colmap_to_image[Path(f).name]) for f in image_names]
 
+        # Preprocess monocular GT normal maps (e.g. from StableNormal), if requested.
+        # Aligned with image_names, so normal_paths[i] matches camtoworlds[i].
+        self.normal_paths = None
+        if kwargs.get("load_image_normal", False):
+            normal_rgb_dir = os.path.join(data_dir, kwargs.get("colmap_normal_dir", "normals"))
+            if not os.path.exists(normal_rgb_dir):
+                raise ValueError(f"GT normal dir {normal_rgb_dir} does not exist!")
+            processed_normal_dir = Path(colmap_image_dir).parent / f"processed_normals_{factor}x"
+            self.normal_paths = process_input_normals(
+                normal_rgb_dir, str(processed_normal_dir), image_names, factor,
+                reuse=reuse_processed_images, num_workers=4,
+            )
+
         # 3D points and {image_name -> [point_idx]}
         points = manager.points3D.astype(np.float32)
         points_err = manager.point3D_errors.astype(np.float32)
@@ -231,6 +244,22 @@ class Parser:
                 camtoworlds = transform_cameras(T3, camtoworlds)
                 points = transform_points(T3, points)
                 transform = T3 @ transform
+
+        if kwargs.get("colmap_z_up", False):
+            # COLMAP's native world up is [0, -1, 0]; rotate the scene so up becomes +Z
+            # (a -90 deg rotation about X). Applied after centering (a translation preserves
+            # the axis); do not combine with `normalize`, which reorients to its own axes.
+            up_to_z = np.array(
+                [
+                    [1.0, 0.0, 0.0, 0.0],
+                    [0.0, 0.0, 1.0, 0.0],
+                    [0.0, -1.0, 0.0, 0.0],
+                    [0.0, 0.0, 0.0, 1.0],
+                ]
+            )
+            camtoworlds = transform_cameras(up_to_z, camtoworlds)
+            points = transform_points(up_to_z, points)
+            transform = up_to_z @ transform
 
         self.image_names = image_names  # List[str], (num_images,)
         self.image_paths = image_paths  # List[str], (num_images,)

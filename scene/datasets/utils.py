@@ -84,6 +84,37 @@ def _process_single_image(
     return str(output_file.resolve())
 
 
+def _process_single_normal(image_name, original_dir, output_dir, factor, reuse):
+    original_dir = Path(original_dir)
+    output_dir = Path(output_dir)
+    normal_file = original_dir / f"{Path(image_name).stem}.png"
+
+    if normal_file.is_dir():
+        return None
+    if not normal_file.exists():
+        raise FileNotFoundError(f"[!] Normal file not found: {normal_file}")
+
+    output_file = output_dir / f"{normal_file.stem}.png"
+    if reuse and output_file.exists():
+        return str(output_file.resolve())
+
+    normal = Image.open(str(normal_file))
+    if normal.mode == "RGBA":
+        r, g, b, _ = normal.split()
+        normal = Image.merge("RGB", (r, g, b))
+    else:
+        normal = normal.convert("RGB")
+
+    width, height = normal.size
+    resolution = (width // factor, height // factor)
+    if factor > 1:
+        # Bilinear on the RGB-encoded direction; renormalized to unit at load time
+        normal = normal.resize(resolution, Image.Resampling.BILINEAR)
+
+    _atomic_save(normal, output_file)
+    return str(output_file.resolve())
+
+
 def _process_single_depth(image_name, original_dir, output_dir, factor, reuse):
     original_dir = Path(original_dir)
     output_dir = Path(output_dir)
@@ -192,3 +223,39 @@ def process_input_depths(
                 pbar.update(1)
 
     return [p for p in depth_paths if p is not None]
+
+
+def process_input_normals(
+    normal_dir, target_dir, image_names, factor,
+    reuse=False,
+    num_workers: int | None = None,
+):
+    output_dir = Path(target_dir)
+    os.makedirs(output_dir, exist_ok=True)
+    original_dir = Path(normal_dir)
+
+    if not reuse:
+        for normal_file in original_dir.iterdir():
+            output_file = output_dir / f"{normal_file.stem}.png"
+            if output_file.exists():
+                output_file.unlink()
+
+    worker = partial(
+        _process_single_normal,
+        original_dir=str(original_dir),
+        output_dir=str(output_dir),
+        factor=factor,
+        reuse=reuse,
+    )
+
+    normal_paths = [None] * len(image_names)
+    with ProcessPoolExecutor(max_workers=num_workers) as pool:
+        futures = {pool.submit(worker, name): idx for idx, name in enumerate(image_names)}
+        with tqdm(total=len(image_names), desc="[>] Processing normals", ncols=128) as pbar:
+            for future in as_completed(futures):
+                idx = futures[future]
+                result = future.result()
+                normal_paths[idx] = result
+                pbar.update(1)
+
+    return [p for p in normal_paths if p is not None]

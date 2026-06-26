@@ -91,12 +91,15 @@ if __name__ == "__main__":
         cfg.depth_image_lambda  > 0.0 or
         cfg.depth_normal_lambda > 0.0 or
         cfg.multi_view_geo_lambda > 0.0 or
-        cfg.multi_view_ncc_lambda > 0.0
+        cfg.multi_view_ncc_lambda > 0.0 or
+        cfg.normal_image_lambda > 0.0
     )
     if should_set_depth_render_mode:
         assert cfg.depth_render_mode is not None, "Depth regularization is required but depth_render_mode is not set"
     if cfg.depth_normal_lambda > 0.0:
         assert cfg.depth_render_mode == "plane", "Depth normal consistency loss required plane depth"
+    if cfg.normal_image_lambda > 0.0:
+        assert cfg.depth_render_mode == "plane", "GT normal supervision requires plane depth (render_normals_c)"
     if cfg.multi_view_geo_lambda > 0.0:
         assert cfg.depth_render_mode == "plane", "Multi-view geometric consistency loss required plane depth"
     if cfg.multi_view_ncc_lambda > 0.0:
