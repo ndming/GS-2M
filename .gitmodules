@@ -1,7 +1,7 @@
 [submodule "submodules/gsplat"]
 	path = submodules/gsplat
 	url = https://github.com/ndming/gsplat.git
-	branch = gs2m
+	branch = pgsr
 [submodule "submodules/ppisp"]
 	path = submodules/ppisp
 	url = https://github.com/nv-tlabs/ppisp.git

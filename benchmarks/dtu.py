@@ -27,7 +27,7 @@ def run(base_dir, out_dir, postfix):
         # Train
         opt = f"--data-factor 2 --save-ply --depth-render-mode plane --save-steps {MAX_STEPS} --eval-steps {MAX_STEPS}"
         etc = f"--disable-viewer --disable-video --traj-num-interps 8 --multi-view-loss-every 4 --depth-normal-loss-from-step 5000"
-        reg = f"--planar-reg 100 --depth-normal-lambda 0.015 --multi-view-ncc-lambda 0.3 --multi-view-geo-lambda 2e-3"
+        reg = f"--planar-reg 100 --depth-normal-lambda 0.015 --multi-view-ncc-lambda 0.4 --multi-view-geo-lambda 4e-3"
         den = f"--strategy.absgrad --strategy.grow-grad2d 0.0008 --strategy.grow_scale3d 0.001 --multi-view-trim"
 
         cmd = f"python train.py default --data-dir {scene_dir} --result-dir {result_dir} {opt} {reg} {etc} {den}"
