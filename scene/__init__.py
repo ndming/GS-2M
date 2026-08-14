@@ -4,6 +4,7 @@ from collections import defaultdict
 from pathlib import Path
 
 from .runner import Config, Runner
+from .viewer import GsplatViewer, GsplatRenderTabState
 
 
 def _index_checkpoints(ckpt_dir: Path):

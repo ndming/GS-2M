@@ -1,16 +1,17 @@
-import random
 import copy
+import random
+import torch
 
 import numpy as np
 import open3d as o3d
-import torch
-import pygltflib
+import matplotlib.pyplot as plt
+import torch.nn.functional as F
+
+from matplotlib import colormaps
 from sklearn.neighbors import NearestNeighbors
 from torch import Tensor
-import torch.nn.functional as F
-import matplotlib.pyplot as plt
-from matplotlib import colormaps
 from patch_ncc import warp_patch_ncc
+
 
 class CameraOptModule(torch.nn.Module):
     """Camera pose optimization module."""
@@ -117,10 +118,37 @@ class AppearanceOptModule(torch.nn.Module):
         return colors
 
 
-# Adapted from: Geometry-Grounded Gaussian Splatting
-# https://github.com/HKUST-SAIL/Geometry-Grounded-Gaussian-Splatting
-class PatchMatch:
-    """Multi-view consistency module"""
+class PgsrAppearance(torch.nn.Module):
+    """Per-image scalar affine: exp(log_gain) * rgb + bias.
+    One (gain, bias) scalar pair per image, zero-init -> identity.
+    """
+
+    def __init__(self, n: int):
+        super().__init__()
+        self.embeds = torch.nn.Embedding(n, 2)  # [log_gain, bias]
+        torch.nn.init.zeros_(self.embeds.weight)
+
+    def forward(self, pred: Tensor, gt: Tensor, embed_ids: Tensor) -> Tensor:
+        params = self.embeds(embed_ids)                  # [B, 2]
+        gain = torch.exp(params[..., 0])[..., None, None, None]
+        bias = params[..., 1][..., None, None, None]
+        return F.l1_loss(gain * pred + bias, gt)
+
+
+def build_decoupled_appearance(style: str, n: int) -> torch.nn.Module:
+    """Factory for the decoupled-appearance module selected by Config."""
+    styles = {"pgsr": PgsrAppearance}
+    if style not in styles:
+        raise ValueError(
+            f"Unknown decoupled_appearance_style {style!r}; expected one of {sorted(styles)}"
+        )
+    return styles[style](n)
+
+
+class PatchMatchModule:
+    """Multi-view consistency module, adapted from GGGS:
+    https://github.com/HKUST-SAIL/Geometry-Grounded-Gaussian-Splatting
+    """
 
     def __init__(
         self,
@@ -170,11 +198,12 @@ class PatchMatch:
         self,
         data_ref,
         data_nea,
-        depth_ref,   # [1, H, W, 1]
-        depth_nea,   # [1, H, W, 1]
-        normal_ref,  # [1, H, W, 3]
-        normal_nea,  # [1, H, W, 3]
+        depth_ref,   # [1, H, W, 1] reference expected depth (from the main render)
+        normal_ref,  # [1, H, W, 3] reference camera-space normals (from the main render)
+        sample_fn,   # (points2d[M,2], want_normals) -> (depth[M], alpha[M], normal[M,3]|[0])
     ):
+        # sample_fn samples the neighbour view's surface geometry directly from the
+        # Gaussians at arbitrary query pixels, no full rendering is rendered.
         cam_ref_params = cam_params_from_data_batch(data_ref)
         cam_nea_params = cam_params_from_data_batch(data_nea)
 
@@ -203,12 +232,12 @@ class PatchMatch:
             pixel_grid_flat, flat_indices = self._grids(h_ref, w_ref)
 
         # Whether to also enforce multi-view normal consistency (part of Lgeo)
-        compute_angle = self.optimize_geo and self.angle_factor > 0.0 and normal_nea is not None
+        compute_angle = self.optimize_geo and self.angle_factor > 0.0
 
         # Lgeo
         with torch.set_grad_enabled(self.optimize_geo):
             # Back-project pixels to camera points using depth map of reference view
-            depth_reshape = depth_ref.squeeze().unsqueeze(-1) # [H, W, 1]
+            depth_reshape = depth_ref.squeeze().unsqueeze(-1)  # [H, W, 1]
             pts_cam_ref = torch.cat(
                 [
                     depth_reshape * ix[None, :, None],
@@ -216,12 +245,12 @@ class PatchMatch:
                     depth_reshape,
                 ],
                 dim=-1,
-            ) # [H, W, 3]
+            )  # [H, W, 3]
 
             # Move cam points in reference view to nearest view (single affine)
             pts_cam_nea = pts_cam_ref @ R_ref_to_nea + t_ref_to_nea  # [H, W, 3]
             K_nea = data_nea["K"].to(self.device)                    # [3, 3]
-            pts_proj_nea = pts_cam_nea @ K_nea.T      # [H, W, 3]
+            pts_proj_nea = pts_cam_nea @ K_nea.T                     # [H, W, 3]
             w_nea, h_nea = cam_nea_params["W"], cam_nea_params["H"]
             pixels_nea = pts_proj_nea[..., :2] / pts_proj_nea[..., 2:3]  # [H, W, 2]
             valid_proj = (
@@ -233,20 +262,18 @@ class PatchMatch:
                 (pts_cam_nea[..., 2] > 0.2) &
                 # ... and come from valid reference depths
                 (pts_cam_ref[..., 2] > 0.2) & (depth_reshape[..., 0] > 1e-6)
-            ) # [H, W]
+            )  # [H, W]
 
             # Flatten valid_proj mask into 1D indices,
             # track which flat pixels survived projection
-            valid_proj_indices = flat_indices[valid_proj.reshape(-1)]  # [M,], where M = valid_proj.sum()
-            sample_pixels = pixels_nea[valid_proj]                     # [M, 2]
-            sample_depths = sample_map(sample_pixels, depth_nea)       # [M, 1]
-            if compute_angle:
-                # Neighbor (cam-space) normals at the same projected pixels
-                sample_normals = sample_map(sample_pixels, normal_nea)  # [M, 3]
+            valid_proj_indices = flat_indices[valid_proj.reshape(-1)]   # [M,], where M = valid_proj.sum()
+            sample_pixels = pixels_nea[valid_proj]                      # [M, 2]
+            # Sample the neighbour surface depth (+ normal) at the projected pixels.
+            sampled_depths, _, sample_normals = sample_fn(sample_pixels, compute_angle)  # [M], [M], [M,3]|[0]
 
-            # Discard samples failing occlussion check and invalid depths
-            queried_depths = pts_cam_nea[valid_proj][:, 2] # [M,]
-            sampled_depths = sample_depths[:, 0]           # [M,]
+            # Discard samples failing occlussion check and invalid depths (depth == 0
+            # means the query pixel hit no surface in the neighbour view)
+            queried_depths = pts_cam_nea[valid_proj][:, 2]  # [M,]
             valid_occ_proj = (
                 (sampled_depths > 1e-6) &
                 (queried_depths - sampled_depths <= self.occlusion_th)
@@ -255,33 +282,33 @@ class PatchMatch:
             # Subindex into valid_proj_indices
             survived_indices = valid_proj_indices[valid_occ_proj]  # [N]
             pixels_nea_valid = sample_pixels[valid_occ_proj]       # [N, 2]
-            depths_nea_valid = sample_depths[valid_occ_proj]       # [N, 1]
+            depths_nea_valid = sampled_depths[valid_occ_proj]      # [N,]
 
             # Back-project to camera points of nearest view using sampled values
             fx_nea, fy_nea = cam_nea_params["fx"], cam_nea_params["fy"]
             cx_nea, cy_nea = cam_nea_params["cx"], cam_nea_params["cy"]
             pts_cam_nea_recon = torch.stack(
                 [
-                    (pixels_nea_valid[:, 0] - cx_nea) / fx_nea * depths_nea_valid[:, 0],
-                    (pixels_nea_valid[:, 1] - cy_nea) / fy_nea * depths_nea_valid[:, 0],
-                    depths_nea_valid[:, 0],
+                    (pixels_nea_valid[:, 0] - cx_nea) / fx_nea * depths_nea_valid,
+                    (pixels_nea_valid[:, 1] - cy_nea) / fy_nea * depths_nea_valid,
+                    depths_nea_valid,
                 ],
                 dim=-1,
-            ) # [N, 3]
+            )  # [N, 3]
 
             # Find the corresponding camera points in reference view
-            pts_cam_ref_recon = pts_cam_nea_recon @ R_nea_to_ref + t_nea_to_ref                                # [N, 3]
-            pts_reprojections = pts_cam_ref_recon[..., :2] / torch.clamp_min(pts_cam_ref_recon[..., 2:], 1e-6) # [N, 2]
+            pts_cam_ref_recon = pts_cam_nea_recon @ R_nea_to_ref + t_nea_to_ref                                 # [N, 3]
+            pts_reprojections = pts_cam_ref_recon[..., :2] / torch.clamp_min(pts_cam_ref_recon[..., 2:], 1e-6)  # [N, 2]
             pts_reprojections = torch.addcmul(
                 pts_reprojections.new_tensor([cx_ref, cy_ref]),
                 pts_reprojections.new_tensor([fx_ref, fy_ref]),
                 pts_reprojections,
-            ) # [N, 2]
+            )  # [N, 2]
 
             # Reference pixel coordinates for the N survivors
-            pixel_f = pixel_grid_flat[survived_indices]                       # [N, 2]
-            pixel_noise = torch.pairwise_distance(pts_reprojections, pixel_f) # [N,]
-            valid_noise = pixel_noise < self.pixel_noise_th                   # [N,] booleans, P trues
+            pixel_f = pixel_grid_flat[survived_indices]                        # [N, 2]
+            pixel_noise = torch.pairwise_distance(pts_reprojections, pixel_f)  # [N,]
+            valid_noise = pixel_noise < self.pixel_noise_th                    # [N,] booleans, P trues
 
             if not valid_noise.any():
                 zero_tensor = torch.tensor(0.0, dtype=torch.float32, device=self.device)
@@ -332,13 +359,13 @@ class PatchMatch:
             # Recover 2D integer pixel coords for warp_patch_ncc
             pixels_ref_ncc = pixel_grid_flat[final_indices].int()  # [P, 2]
 
-        depth_ref_select = torch.index_select(depth_ref.reshape(-1), dim=0, index=final_indices)         # [P,]
-        normal_ref_ = normal_ref.squeeze(0).permute(2, 0, 1)  # [3, H, W] 
-        normal_ref_select = torch.index_select(normal_ref_.reshape(3, -1).T, dim=0, index=final_indices) # [P, 3]
+        depth_ref_select = torch.index_select(depth_ref.reshape(-1), dim=0, index=final_indices)          # [P,]
+        normal_ref_ = normal_ref.squeeze(0).permute(2, 0, 1)                                              # [3, H, W] 
+        normal_ref_select = torch.index_select(normal_ref_.reshape(3, -1).T, dim=0, index=final_indices)  # [P, 3]
         normal_ref_select = F.normalize(normal_ref_select, dim=-1)
 
-        gray_ref = data_ref["gray"].to(self.device).squeeze() / 255.0  # [H, W]
-        gray_nea = data_nea["gray"].to(self.device).squeeze() / 255.0  # [H, W] 
+        gray_ref = data_ref["gray_image"].to(self.device).squeeze() / 255.0  # [H, W]
+        gray_nea = data_nea["gray_image"].to(self.device).squeeze() / 255.0  # [H, W] 
 
         cc, valid_mask = warp_patch_ncc(
             depth_ref_select,
@@ -366,8 +393,8 @@ class PatchMatch:
 
 
 def cam_params_from_data_batch(data_batch):
-    gt_image = data_batch["image"].squeeze() # [H, W, 3]
-    K = data_batch["K"].squeeze()            # [3, 3]
+    gt_image = data_batch["image"].squeeze()  # [H, W, 3]
+    K = data_batch["K"].squeeze()             # [3, 3]
     H, W = gt_image.shape[:2]
     fx = K[0, 0]
     fy = K[1, 1]
@@ -408,6 +435,28 @@ def sample_map(pixels, target):
     return samples
 
 
+def fibonacci_sphere_points(num_points, radius=1.0, center=(0.0, 0.0, 0.0)):
+    """Deterministically sample points on a sphere surface via a Fibonacci lattice.
+    Reference: https://github.com/NK-CS-ZZL/DiscretizedSDF/blob/main/scene/NVDIFFREC/util.py#L869
+
+    A Fibonacci (golden-angle) lattice spreads points near-uniformly over the sphere
+    and, unlike random sampling, is deterministic. Spherical initialization yields more
+    robust geometry than random volumetric init for foreground objects, mitigating
+    broken surfaces and local minima early in Gaussian splatting training.
+
+    Returns an (num_points, 3) float32 array.
+    """
+    phi = (np.sqrt(5.0) - 1.0) * np.pi  # golden angle
+    idx = np.arange(num_points) + 1
+    z = (2.0 * idx - 1.0) / num_points - 1.0
+    rad = np.sqrt(1.0 - z ** 2)
+    theta = phi * idx
+    x = np.sin(theta) * rad
+    y = np.cos(theta) * rad
+    points = np.stack([x, y, z], axis=-1).astype(np.float32)
+    return np.asarray(center, dtype=np.float32) + radius * points
+
+
 def rotation_6d_to_matrix(d6: Tensor) -> Tensor:
     """
     Converts 6D rotation representation by Zhou et al. [1] to rotation matrix
@@ -430,6 +479,28 @@ def rotation_6d_to_matrix(d6: Tensor) -> Tensor:
     b2 = F.normalize(b2, dim=-1)
     b3 = torch.cross(b1, b2, dim=-1)
     return torch.stack((b1, b2, b3), dim=-2)
+
+
+def quats_scales_to_normals(q_raw: Tensor, s: Tensor) -> Tensor:
+    """Select the rotation matrix column corresponding to the minimum scale axis.
+    
+    Args:
+        q_raw: Quaternions (wxyz), not required to be normalized. [..., 4]
+        s:     Scale factors. [..., 3]
+    Returns:
+        normals: World-space unit normals. [..., 3]
+    """
+    min_axis_idx = torch.argmin(s, dim=-1, keepdim=True)  # [..., 1]
+    q = F.normalize(q_raw, dim=-1)                        # [..., 4]
+    w, x, y, z = q.unbind(dim=-1)                         # each [...]
+    x2, y2, z2 = x*x, y*y, z*z
+    xy, xz, yz = x*y, x*z, y*z
+    wx, wy, wz = w*x, w*y, w*z
+    col0 = torch.stack([1-2*(y2+z2),  2*(xy+wz),   2*(xz-wy)], dim=-1)   # [..., 3]
+    col1 = torch.stack([2*(xy-wz),    1-2*(x2+z2), 2*(yz+wx)], dim=-1)   # [..., 3]
+    col2 = torch.stack([2*(xz+wy),    2*(yz-wx),   1-2*(x2+y2)], dim=-1) # [..., 3]
+    return torch.where(min_axis_idx == 0, col0,
+           torch.where(min_axis_idx == 1, col1, col2))                   # [..., 3]
 
 
 def knn(x: Tensor, K: int = 4) -> Tensor:
@@ -550,7 +621,49 @@ def image_grad_weight(image):
     return grad
 
 
-def fix_normal_coordinates(normal_map):
+def depths_to_camera_normals(
+        depths,  # [B, H, W, 1]
+        Ks,      # [B, 3, 3]
+    ):
+    """Estimate camera-space normals from rendered depth maps via finite differences.
+
+    Back-projects each pixel to a camera-space point using the per-view intrinsics,
+    then takes the cross product of the local depth gradients. Camera-space to match
+    the rendered normals for the depth-normal consistency loss.
+
+    Returns:
+        normals: [B, H, W, 3], unit camera-space normals (zero on the 1-px border)
+        valid_points: [B, H, W, 1] bool, pixels with a full valid 4-neighbourhood
+    """
+    B, H, W, _ = depths.shape
+    fx, fy = Ks[:, 0, 0], Ks[:, 1, 1]  # [B,]
+    cx, cy = Ks[:, 0, 2], Ks[:, 1, 2]  # [B,]
+
+    d = depths.squeeze(-1)  # [B, H, W]
+    u = torch.arange(W, device=depths.device, dtype=depths.dtype)  # [W,]
+    v = torch.arange(H, device=depths.device, dtype=depths.dtype)  # [H,]
+    # Per-view back-projection: X = d * (u - cx) / fx, Y = d * (v - cy) / fy, Z = d
+    x = d * ((u.view(1, 1, W) - cx.view(B, 1, 1)) / fx.view(B, 1, 1))  # [B, H, W]
+    y = d * ((v.view(1, H, 1) - cy.view(B, 1, 1)) / fy.view(B, 1, 1))  # [B, H, W]
+    points = torch.stack([x, y, d], dim=-1)  # [B, H, W, 3]
+
+    dy = points[:, 2:, 1:-1] - points[:, :-2, 1:-1]  # [B, H-2, W-2, 3]
+    dx = points[:, 1:-1, 2:] - points[:, 1:-1, :-2]  # [B, H-2, W-2, 3]
+    normal_map = F.normalize(torch.cross(dy, dx, dim=-1), dim=-1)  # [B, H-2, W-2, 3]
+    # Pad the H and W dims back by 1 each, leaving batch and channel untouched
+    normals = F.pad(normal_map, (0, 0, 1, 1, 1, 1))  # [B, H, W, 3]
+
+    valid = depths > 0  # [B, H, W, 1]
+    valid_depths = (
+        valid[:, 2:, 1:-1] & valid[:, :-2, 1:-1] &
+        valid[:, 1:-1, 2:] & valid[:, 1:-1, :-2] & valid[:, 1:-1, 1:-1]
+    )  # [B, H-2, W-2, 1]
+    valid_points = torch.zeros_like(depths, dtype=torch.bool)  # [B, H, W, 1]
+    valid_points[:, 1:-1, 1:-1] = valid_depths
+    return normals, valid_points
+
+
+def apply_opengl_normals(normal_map):
     # Flatten and normalize normals
     normals = normal_map.view(-1, 3).clone()  # [H * W, 3]
     normals = F.normalize(normals, dim=1, p=2)
@@ -655,6 +768,7 @@ def write_mesh_glb(path, mesh):
     faces_blob  = faces.tobytes()
     colors_blob = colors.tobytes()
 
+    import pygltflib
     gltf = pygltflib.GLTF2(
         scene=0,
         scenes=[pygltflib.Scene(nodes=[0])],
@@ -705,6 +819,15 @@ def write_mesh_glb(path, mesh):
 
 
 def write_mesh(path, mesh):
+    # Clamp vertex colors to [0, 1]. TSDF color fusion (weighted average of
+    # already-clamped renders) can leave float-rounding overshoot (~1e-7) on
+    # saturated regions, which makes Open3D's PLY writer emit a "clamped color
+    # value" warning. This clamp is a no-op on the actual values and silences it.
+    if mesh.has_vertex_colors():
+        vc = np.asarray(mesh.vertex_colors)
+        if vc.size and (vc.min() < 0.0 or vc.max() > 1.0):
+            mesh.vertex_colors = o3d.utility.Vector3dVector(np.clip(vc, 0.0, 1.0))
+
     if path.suffix.lower() == ".glb":
         print(f"[>] Exporting mesh as GLB format")
         write_mesh_glb(path, mesh)

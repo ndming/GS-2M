@@ -180,19 +180,77 @@ python train.py default -h
 
 
 ### Mesh extraction
+We provide a centralized `mesh.py` script for mesh extraction:
 ```bash
-python mesh.py tsdf_single --cfg-file output/scene/cfg.yml
+python mesh.py -h           # list which extraction methods are available
+python mesh.py <method> -h  # list extraction and post-processing options
 ```
 
-The `.ply` file of the extracted triangle mesh can be found at:
-```
-output/scene/mesh/tsdf_single_step*.ply
+The script requires the `cfg.yml` file saved during training to load the model checkpoint and run extraction:
+```bash
+# Extracted meshes are saved at <result_dir>/mesh
+python mesh.py [...] --cfg-file <result_dir>/cfg.yml [--ckpt-step 24999 --export-glb]
 ```
 
-Please tune the extraction parameters of `mesh.py` depending on the nature of your scene:
+If training saves multiple checkpoints, `mesh.py` detects and loads the latest one. The `--ckpt-step` option
+can be used to override this behavior by specifying a specific training step at which to load `.pt` files.
+
+Extracted meshes will be saved as `PLY` (default) of `GLB` (if `--export-glb` is given).
+
+#### TSDF fusion
+Mesh extraction with TSDF fusion is the most prevalent meshing method with the following properties:
+- Fastest for small/object-centric scenes with superb mesh quality (provided well-trained Gaussians)
+- Capable of extracting clean foreground mehses using per-view foreground masks
+- Slow for mid-size/unbounded scenes where fine voxel resolutions may cause out-of-memory
+
+TSDF fusion is therefore recommended for object-centric scenes where foreground masks obtained through
+an off-the-shelf segmentation model can be provided to extract a clean, background-free triangle mesh. 
+
+```bash
+python mesh.py tsdf --cfg-file <result_dir>/cfg.yml [--extraction.resolution 512]
 ```
-python mesh.py -h
-python mesh.py tsdf_single -h
+
+<details>
+<summary><span style="font-weight: bold;">Important parameters for TSDF fusion</span></summary>
+
+- `resolution`: number of voxels across the scene diameter, higher values yielding finer meshes but at the cost of
+extra runtime and CPU RAM.
+- `voxel-size`: absolute voxel side in world units, overrides `resolution` when `> 0`; primarily used to reproduce exact
+extraction configs of previous works.
+- `trunc-voxels`: the width of the SDF truncation band in voxels; larger values produce smoother but rounder corners,
+while smaller values produce sharper but are more prone to holes.
+- `max-depth`: rendered depth beyond this value (world units) will be discarded; lower it to cull far-background floaters,
+or raise it if the far side of the object gets clipped.
+
+</details>
+
+<details>
+<summary><span style="font-weight: bold;">Tuning based on scene size</span></summary>
+
+- Prefer `resolution` over `voxel-size` because it is defined relative to the scene extent (the same value transfers
+across a small object and a large room) — please raise it when you want more detail.
+- If the far side of a deep capture is missing, the auto `max-depth` (scene radius) is too tight — please raise it.
+- If you run out of memory, please lower `resolution` (or set a coarser absolute `voxel-size`).
+- There are two marching-cubes `backend`s:
+    - `vbg` (`VoxelBlockGrid`) drops voxels seen by fewer than 3 views, giving cleaner meshes on object-centric captures,
+    faster but its extractor crashes on large scenes.
+    - `scalable` (`ScalableTSDFVolume`) is robust at any size but keeps more low-observation surface.
+    - `auto` (default) picks `vbg` for small scenes and `scalable` for large — set it explicitly to override
+    (e.g. `vbg` for objects, `scalable` for rooms/buildings).
+- `vbg-max-scale`: the scene half-extent (world units) below which the `auto` backend may pick `vbg` (default `3.0`);
+object captures sit around `1.7`–`2`, room/building scenes around `5+`.
+
+</details>
+
+<details>
+<summary><span style="font-weight: bold;">Restricting fusion to a bounding box</span></summary>
+
+- `bounds-file`: path to a JSON with an `aabb_range` key (`[[xmin,xmax],[ymin,ymax],[zmin,zmax]]`) defining the bounding
+volume where fusion should happens, the grid is sized to the box at `2048^3` (unless an explicit `voxel-size` is set).
+- The box is in the **world frame**, so the model should be trained **un-normalized** (`normalize_world_space=False`,
+`center_world_space=False`) for it to line up; a warning is printed otherwise.
+
+</details>
 ```
 
 ### Export trained Gaussians and the extracted mesh to a USDZ scene
@@ -244,7 +302,7 @@ dtu/Official_DTU_Dataset/
 ```bash
 python benchmarks/dtu.py --data_base_dir <path/to/dtu>
 ```
-- The reconstruction statistics can be found at:
+- Evaluation results are saved in:
 ```bash
 output/dtu/stats.json
 ```

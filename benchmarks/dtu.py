@@ -2,14 +2,16 @@ import json
 import os
 
 from argparse import ArgumentParser
+from datetime import datetime
 from pathlib import Path
 
 
-SCENES = [24, 37, 40, 55, 63, 65, 69, 83, 97, 105, 106, 110, 114, 118, 122]
+SCANS = [24, 37, 40, 55, 63, 65, 69, 83, 97, 105, 106, 110, 114, 118, 122]
+
 MAX_STEPS = 30000
 
 
-def run(base_dir, out_dir, postfix):
+def run(base_dir, out_dir):
     psnr = 0.0
     ssim = 0.0
     pips = 0.0
@@ -19,43 +21,46 @@ def run(base_dir, out_dir, postfix):
     cd = 0.0
     scene_count = 0
 
-    for scene in SCENES:
-        scene_dir = base_dir / f"scan{scene}"
-        out_dir_name = f"scan{scene}" if postfix == "" else f"scan{scene}_{postfix}"
-        result_dir = out_dir / out_dir_name
+    for scan in SCANS:
+        scene_dir = base_dir / f"scan{scan}"
+        scene = scene_dir.name
+        result_dir = out_dir / scene
+
+        # Training configs
+        opt = f"--data-factor 2 --depth-render-mode PD --save-steps {MAX_STEPS} --eval-steps {MAX_STEPS}"
+        etc = f"--disable-viewer --no-disable-video --traj-interp-factor 8"
+        den = f"--strategy.absgrad --strategy.grow-grad2d 0.0008 --strategy.grow_scale3d 0.001"
+        reg = f"--planar-reg 100.0 --multi-view-max-num-samples 102400 --multi-view-trim"
+        Ldn = f"--depth-normal-lambda 0.015 --depth-normal-loss-edge-aware"  # from step 7k
+        Lmv = f"--multi-view-ncc-lambda 0.15 --multi-view-geo-lambda 0.03"   # from step 7k
 
         # Train
-        opt = f"--data-factor 2 --save-ply --depth-render-mode plane --save-steps {MAX_STEPS} --eval-steps {MAX_STEPS}"
-        etc = f"--disable-viewer --disable-video --traj-num-interps 8 --multi-view-loss-every 4 --depth-normal-loss-from-step 5000"
-        reg = f"--planar-reg 100 --depth-normal-lambda 0.015 --multi-view-ncc-lambda 0.4 --multi-view-geo-lambda 4e-3"
-        den = f"--strategy.absgrad --strategy.grow-grad2d 0.0008 --strategy.grow_scale3d 0.001 --multi-view-trim"
-
-        cmd = f"python train.py default --data-dir {scene_dir} --result-dir {result_dir} {opt} {reg} {etc} {den}"
-        print("=" * (len(f"scan{scene}")))
-        print(f"scan{scene}")
-        print("=" * (len(f"scan{scene}")))
-        ret = os.system(cmd)
-        if ret != 0:
-            print(f"\n>>> Error occurred for scan{scene} (training) <<<\n")
+        cmd = f"python train.py adc --data-dir {scene_dir} --result-dir {result_dir} {opt} {etc} {den} {reg} {Ldn} {Lmv}"
+        print("=" * len(scene))
+        print(f"{scene}")
+        print("=" * len(scene))
+        if os.system(cmd) != 0:
+            print(f"\n>>> Error occurred for scene {scene} <<<\n")
             continue
 
         # Extract mesh
-        opt = f"--extraction.max-depth 5.0 --extraction.voxel-size 0.002 --num-clusters 1 --depth-cutoff-factor 2.5"
-        cmd = f"python mesh.py tsdf_single --cfg-file {result_dir / 'cfg.yml'} {opt}"
-        ret = os.system(cmd)
-        if ret != 0:
-            print(f"\n>>> Error occurred for scan{scene} (mesh extraction) <<<\n")
+        opt = f"--extraction.max-depth 8.0 --extraction.voxel-size 0.002 --extraction.trunc-voxels 4.0 --num-clusters 1"
+        etc = f"--render-traj --render-traj-depth-cutoff-factor 2.5"  # render qualitative visualization
+        cmd = f"python mesh.py tsdf --cfg-file {result_dir / 'cfg.yml'} {opt} {etc} --extraction.backend vbg"
+        if os.system(cmd) != 0:
+            print(f"\n>>> Error occurred for scene {scene} <<<\n")
             continue
 
         # Evaluate mesh
-        mesh_file = result_dir / "mesh" / f"tsdf_single_step{MAX_STEPS - 1}.ply"
+        mesh_file = result_dir / "mesh" / f"tsdf_step{MAX_STEPS - 1}.ply"
         dtu = base_dir / "Official_DTU_Dataset"
         cmd = f"python scripts/eval_dtu/evaluate_single_scene.py --input_ply {mesh_file} --ref_dir {scene_dir} --dtu_dir {dtu}"
         ret = os.system(cmd)
         if ret != 0:
-            print(f"\n>>> Error occurred for scan{scene} (mesh evaluation) <<<\n")
+            print(f"\n>>> Error occurred for scene {scene} (mesh evaluation) <<<\n")
             continue
 
+        # Quantitative results
         with open(result_dir / "stats" / f"train_{MAX_STEPS}_metrics.json", 'r') as f:
             metrics = json.load(f)
         with open(result_dir / "stats" / f"train_{MAX_STEPS}_rank0.json", 'r') as f:
@@ -67,7 +72,7 @@ def run(base_dir, out_dir, postfix):
         ssim += metrics["ssim"]
         pips += metrics["lpips"]
         time += runtime["ellapsed_time"]
-        vram += runtime["mem"]
+        vram += runtime["mem_gb"]
         cd   += chamfer["overall"]
         scene_count += 1
 
@@ -88,8 +93,10 @@ def run(base_dir, out_dir, postfix):
         with open(stats_file, 'r') as f:
             stats_data = json.load(f)
 
-    key = "default" if postfix == "" else postfix
-    stats_data[key] = {
+    run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
+    stats_data[run_id] = {
+        "total_scenes": len(SCANS),
+        "completed_scenes": scene_count,
         "psnr": avg_psnr,
         "ssim": avg_ssim,
         "lpips": avg_pips,
@@ -105,8 +112,7 @@ def run(base_dir, out_dir, postfix):
 if __name__ == "__main__":
     parser = ArgumentParser()
     parser.add_argument("--data_base_dir", type=str, required=True, help="Directory containig all scenes")
-    parser.add_argument("-o", "--out_dir", type=str, default="output/dtu", help="Where store all outputs")
-    parser.add_argument("-p", "--postfix", type=str, default="", help="Postfix label for the run")
+    parser.add_argument("-o", "--out_dir", type=str, default="output/dtu", help="Directory to store all scene outputs")
     args = parser.parse_args()
 
     base_dir = Path(args.data_base_dir).resolve()
@@ -116,11 +122,9 @@ if __name__ == "__main__":
         print(f"[!] Could NOT find dataset directory: {base_dir}")
         exit(1)
 
-    for scene_dir in base_dir.iterdir():
-        if not scene_dir.is_dir() or scene_dir.name == "Official_DTU_Dataset":
-            continue
-        if not scene_dir.name in [f"scan{scene}" for scene in SCENES]:
-            print(f"[!] Unrecognized scene dir: {scene_dir.name} (expected one of {SCENES})")
+    for scan in SCANS:
+        if not (base_dir / f"scan{scan}").exists():
+            print(f"[!] Could NOT find scene directory: {base_dir / f'scan{scan}'}")
             exit(1)
 
-    run(base_dir, out_dir, args.postfix)
+    run(base_dir, out_dir)
