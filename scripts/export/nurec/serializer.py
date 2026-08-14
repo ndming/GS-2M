@@ -24,7 +24,7 @@ from pathlib import Path
 import numpy as np
 from pxr import Gf, Sdf, Usd, UsdGeom, UsdUtils, UsdVol
 
-from .transforms import get_3dgrut_to_usdz_coordinate_transform
+from .transforms import get_3dgrut_to_usdz_coordinate_transform, make_scene_z_transform
 from .templates import NamedSerialized
 from .stage_utils import (
     NamedUSDStage,
@@ -76,6 +76,8 @@ def serialize_nurec_usd(
     positions: np.ndarray,
     normalizing_transform: np.ndarray = np.eye(4),
     apply_coordinate_transform: bool = False,
+    z_offset: float = 0.0,
+    z_rotate_deg: float = 0.0,
 ) -> NamedUSDStage:
     """
     Create a USD file for the 3DGS model.
@@ -85,6 +87,8 @@ def serialize_nurec_usd(
         positions: Positions extracted from PLY file for AABB calculation
         normalizing_transform: 4x4 transformation matrix to normalize the scene (defaults to identity)
         apply_coordinate_transform: If True, apply 3DGRUT-to-USDZ coordinate transform (Omniverse convention)
+        z_offset: Translate the whole scene up the world +Z axis (scene units)
+        z_rotate_deg: Rotate the whole scene about the world +Z axis (degrees)
 
     Returns:
         NamedUSDStage object containing the USD stage
@@ -133,9 +137,11 @@ def serialize_nurec_usd(
     else:
         corrected_matrix = normalizing_inverse
 
-    # Apply transform directly to the gauss volume
+    # Apply transform directly to the gauss volume. The scene z-transform is applied
+    # last (world space) so the exported scene lands upright for Isaac Sim.
+    scene_transform = make_scene_z_transform(z_offset, z_rotate_deg)
     matrix_op = gauss_volume.AddTransformOp()
-    matrix_op.Set(Gf.Matrix4d(*corrected_matrix.flatten()))
+    matrix_op.Set(Gf.Matrix4d(*corrected_matrix.flatten()) * scene_transform)
 
     # Define nurec volume properties
     gauss_prim.CreateAttribute("omni:nurec:isNuRecVolume", Sdf.ValueTypeNames.Bool).Set(True)

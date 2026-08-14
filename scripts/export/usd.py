@@ -12,6 +12,10 @@ if __name__ == "__main__":
     parser.add_argument("--sh_degree", type=int, default=3, help="Max SH degree (default: 3)")
     parser.add_argument("--collision", action="store_true", help="Enable physics collision on mesh")
     parser.add_argument("--invisible", action="store_true", help="Make injected mesh invisible")
+    parser.add_argument("--z-offset", type=float, default=0.0, dest="z_offset",
+                        help="Translate the whole scene up the +Z axis by this amount (scene units)")
+    parser.add_argument("--z-rotate", type=float, default=0.0, dest="z_rotate",
+                        help="Rotate the whole scene about the +Z axis by this angle (degrees)")
     args = parser.parse_args()
 
     ply_file = Path(args.input_ply)
@@ -23,7 +27,10 @@ if __name__ == "__main__":
     model = GaussianPLYModel(str(ply_file), max_sh_degree=args.sh_degree)
 
     exporter = NuRecExporter()
-    exporter.export(model, out_file, dataset=None, conf=default_nurec_config())
+    exporter.export(
+        model, out_file, dataset=None, conf=default_nurec_config(),
+        z_offset=args.z_offset, z_rotate_deg=args.z_rotate,
+    )
 
     if args.mesh_ply != "":
         mesh_file = Path(args.mesh_ply)
@@ -35,6 +42,8 @@ if __name__ == "__main__":
             mesh_usd_path=None,
             set_collision=args.collision,
             set_invisible=args.invisible,
+            z_offset=args.z_offset,
+            z_rotate_deg=args.z_rotate,
         )
 
     print(f"[>] Done!")

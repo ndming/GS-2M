@@ -116,6 +116,26 @@ def get_3dgrut_to_usdz_coordinate_transform() -> np.ndarray:
     )
 
 
+def make_scene_z_transform(z_offset: float = 0.0, z_rotate_deg: float = 0.0) -> Gf.Matrix4d:
+    """Build a world-space USD transform that rotates about +Z then translates along +Z.
+
+    Applied last (in world space) to place the whole scene for Isaac Sim, so the
+    floor sits near z and the xy orientation matches the navigation model. The
+    rotation and translation both act on the Z axis and therefore commute, so the
+    composition order does not matter.
+
+    Args:
+        z_offset: Translation up the world +Z axis (scene units).
+        z_rotate_deg: Rotation about the world +Z axis (degrees).
+
+    Returns:
+        Gf.Matrix4d in USD row-vector convention (v' = v * M).
+    """
+    rotation = Gf.Matrix4d().SetRotate(Gf.Rotation(Gf.Vec3d(0.0, 0.0, 1.0), float(z_rotate_deg)))
+    translation = Gf.Matrix4d().SetTranslate(Gf.Vec3d(0.0, 0.0, float(z_offset)))
+    return rotation * translation
+
+
 def column_vector_4x4_to_usd_matrix(matrix: np.ndarray) -> Gf.Matrix4d:
     """Build USD Gf.Matrix4d from a column-vector 4x4 (p' = M @ p).
 

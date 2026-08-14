@@ -5,6 +5,7 @@ from plyfile import PlyData
 
 from .base import ExportableModel
 from .exporter import NuRecExporter, _get_default_nurec_conf as default_nurec_config
+from .transforms import make_scene_z_transform
 
 
 class GaussianPLYModel(ExportableModel):
@@ -184,6 +185,8 @@ def add_mesh_to_usdz(
     referencing_usd=None,
     set_collision=True,
     set_invisible=False,
+    z_offset=0.0,
+    z_rotate_deg=0.0,
 ):
     """
     Add the specified mesh into the USDZ.
@@ -206,6 +209,10 @@ def add_mesh_to_usdz(
                          as the file containing a Volume prim (gauss.usda / volume.usda).
         set_collision: If True, enable collision on mesh prims in mesh.usd.
         set_invisible: If True, make mesh prims in mesh.usd invisible.
+        z_offset: Translate the mesh up the world +Z axis (scene units). Must match the
+                  value used for the Gaussian volume so the two stay aligned.
+        z_rotate_deg: Rotate the mesh about the world +Z axis (degrees). Must match the
+                      value used for the Gaussian volume so the two stay aligned.
     """
     input_path = Path(input_usdz)
     if not input_path.exists():
@@ -288,6 +295,12 @@ def add_mesh_to_usdz(
             prim = stage.OverridePrim(mesh_prim_path)
         prim.GetReferences().AddReference(assetPath="mesh.usd")
         print(f"[>] Added {mesh_prim_path} with reference to mesh.usd")
+
+        # Apply the same world-space z-transform as the Gaussian volume so the mesh
+        # stays aligned with the splats after the scene is repositioned for Isaac Sim.
+        if z_offset != 0.0 or z_rotate_deg != 0.0:
+            UsdGeom.Xformable(prim).AddTransformOp().Set(make_scene_z_transform(z_offset, z_rotate_deg))
+            print(f"[>] Applied scene z-transform to {mesh_prim_path} (offset={z_offset}, rotate={z_rotate_deg} deg)")
 
         # 3b: Set proxy relationship on the Volume prim -> </World/mesh>
         volume_prim = _find_volume_prim(stage)

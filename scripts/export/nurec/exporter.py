@@ -172,6 +172,8 @@ class NuRecExporter(ModelExporter):
         model_file = NamedSerialized(filename=output_path.stem + ".nurec", serialized=buffer.getvalue())
 
         apply_coordinate_transform = kwargs.get("apply_coordinate_transform", False)
+        z_offset = kwargs.get("z_offset", 0.0)
+        z_rotate_deg = kwargs.get("z_rotate_deg", 0.0)
 
         # Create USD representations
         gauss_usd = serialize_nurec_usd(
@@ -179,6 +181,8 @@ class NuRecExporter(ModelExporter):
             attrs.positions,
             normalizing_transform,
             apply_coordinate_transform=apply_coordinate_transform,
+            z_offset=z_offset,
+            z_rotate_deg=z_rotate_deg,
         )
         default_usd = serialize_usd_default_layer(gauss_usd)
 
