@@ -11,8 +11,7 @@ import numpy as np
 from pycolmap.rotation import Quaternion
 from tqdm import tqdm
 
-from .normalize import transform_cameras, transform_points
-from .utils import process_input_images, process_input_depths
+from .utils import process_input_images, process_input_depths, transform_cameras, transform_points
 
 
 def _read_keyframe_poses(pose_file, stride=1, max=0, offset=0):

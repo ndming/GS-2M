@@ -7,17 +7,18 @@ import torch
 import imageio.v2 as imageio
 import numpy as np
 
-from .colmap import Parser as ColmapParser
-from .dso    import Parser as DsoParser
+from .colmap  import Parser as ColmapParser
+from .blender import Parser as BlenderParser
 
 
 def get_parser(data_dir):
-    if (Path(data_dir) / "sparse").exists():
+    data_path = Path(data_dir)
+    if (data_path / "sparse").exists():
         print("[>] Detected sparse dir, assuming COLMAP scene")
         return ColmapParser
-    if (Path(data_dir) / "dso").exists():
-        print("[>] Detected dso dir, assuming DSO scene")
-        return DsoParser
+    if (data_path / "transforms_train.json").exists():
+        print("[>] Detected transforms_train.json, assuming Blender scene")
+        return BlenderParser
     raise ValueError(f"Could NOT auto detect dataset type for {data_dir}")
 
 
@@ -26,24 +27,26 @@ class Dataset:
 
     def __init__(
         self,
-        parser: ColmapParser | DsoParser,
+        parser: ColmapParser | BlenderParser,
         split: str = "train",
         patch_size: Optional[int] = None,
-        load_point_depth: bool = False,
-        load_image_depth: bool = False,
-        load_image_gray:  bool = False,
-        load_image_normal: bool = False,
+        load_point_depth:  bool = False,
+        load_image_depth:  bool = False,
+        load_image_gray:   bool = False,
     ):
         self.parser = parser
         self.split = split
         self.patch_size = patch_size
-        self.load_point_depth = load_point_depth
-        self.load_image_depth = load_image_depth
-        self.load_image_gray  = load_image_gray
-        self.load_image_normal = load_image_normal
+        self.load_point_depth  = load_point_depth
+        self.load_image_depth  = load_image_depth
+        self.load_image_gray   = load_image_gray
 
         indices = np.arange(len(self.parser.image_names))
-        if self.parser.test_every <= 0 and split == "train":
+        split_indices = getattr(self.parser, "split_indices", None)
+        if split_indices is not None:
+            # Parser provides an explicit split (e.g. Blender's train/test transforms)
+            self.indices = split_indices["train" if split == "train" else "test"]
+        elif self.parser.test_every <= 0 and split == "train":
             self.indices = indices # get all training images if testing is disabled
         elif self.parser.test_every <= 0 and split == "val":
             self.indices = indices[indices % 5 == 0] # sample images like the original 3DGS
@@ -60,7 +63,7 @@ class Dataset:
 
         input = imageio.imread(self.parser.image_paths[index])
         image = input[..., :3]  # [H, W, 3]
-        alpha = input[..., 3:]  # [H, W, 1]
+        alpha = input[..., 3]   # [H, W]
 
         camera_id = self.parser.camera_ids[index]
         K = self.parser.Ks_dict[camera_id].copy()  # undistorted K
@@ -75,23 +78,26 @@ class Dataset:
                 self.parser.mapy_dict[camera_id],
             )
             image = cv2.remap(image, mapx, mapy, cv2.INTER_LINEAR)
-            x, y, w, h = self.parser.roi_undist_dict[camera_id]
-            image = image[y : y + h, x : x + w]
+            alpha = cv2.remap(alpha, mapx, mapy, cv2.INTER_NEAREST)
+            rx, ry, rw, rh = self.parser.roi_undist_dict[camera_id]
+            image = image[ry : ry + rh, rx : rx + rw]
+            alpha = alpha[ry : ry + rh, rx : rx + rw]
 
         if self.patch_size is not None:
             # Random crop.
             h, w = image.shape[:2]
-            x = np.random.randint(0, max(w - self.patch_size, 1))
-            y = np.random.randint(0, max(h - self.patch_size, 1))
-            image = image[y : y + self.patch_size, x : x + self.patch_size]
-            K[0, 2] -= x
-            K[1, 2] -= y
+            px = np.random.randint(0, max(w - self.patch_size, 1))
+            py = np.random.randint(0, max(h - self.patch_size, 1))
+            image = image[py : py + self.patch_size, px : px + self.patch_size]
+            alpha = alpha[py : py + self.patch_size, px : px + self.patch_size]
+            K[0, 2] -= px
+            K[1, 2] -= py
 
         data = {
             "K": torch.from_numpy(K).float(),
             "camtoworld": torch.from_numpy(camtoworlds).float(),
             "image": torch.from_numpy(image).float(),
-            "alpha": torch.from_numpy(alpha).float(),
+            "alpha": torch.from_numpy(alpha[..., None]).float(),  # [H, W, 1]
             "image_id": item,  # the index of the image in the dataset
             "camera_idx": self.parser.camera_indices[
                 index
@@ -106,7 +112,8 @@ class Dataset:
             data["exposure"] = torch.tensor(exposure, dtype=torch.float32)
 
         if self.load_point_depth:
-            if not hasattr(self.parser, "points") or self.parser.points is None:
+            if (not hasattr(self.parser, "points") or self.parser.points is None
+                    or not getattr(self.parser, "point_indices", None)):
                 raise ValueError(f"The current scene loader ({self.parser.__class__.__name__}) does not support point depth")
 
             # Projected points to image plane to get depths
@@ -141,42 +148,17 @@ class Dataset:
             depth = depth * self.parser.depth_scale
 
             if len(params) > 0:
-                # Undistort depth image, very unlikely
+                # Undistort depth image
                 depth = cv2.remap(depth, mapx, mapy, cv2.INTER_NEAREST)
-                depth = depth[y : y + h, x : x + w]
+                depth = depth[ry : ry + rh, rx : rx + rw]
 
             if self.patch_size is not None:
-                depth = depth[y : y + self.patch_size, x : x + self.patch_size]
+                depth = depth[py : py + self.patch_size, px : px + self.patch_size]
 
-            data["depth_image"] = torch.from_numpy(depth).float().unsqueeze(-1) # [H, W, 1]
+            data["depth_image"] = torch.from_numpy(depth).float().unsqueeze(-1)  # [H, W, 1]
 
         if self.load_image_gray:
             gray = 0.299 * image[..., 0] + 0.587 * image[..., 1] + 0.114 * image[..., 2]
-            data["gray"] = torch.from_numpy(gray).float().unsqueeze(-1)  # [H, W, 1]
-
-        if self.load_image_normal:
-            if not hasattr(self.parser, "normal_paths") or self.parser.normal_paths is None:
-                raise ValueError(f"The current scene loader ({self.parser.__class__.__name__}) does not support image normals")
-
-            # StableNormal (like DSINE/Omnidata/Marigold) outputs camera-space normals in the
-            # OpenGL convention (+Y up, +Z toward viewer). gsplat's render_normals_c is OpenCV
-            # camera space (+Y down, +Z into the scene), so flip Y and Z to align the frames.
-            normal = imageio.imread(self.parser.normal_paths[index])[..., :3]
-            normal = normal.astype(np.float32) / 255.0 * 2.0 - 1.0   # decode RGB -> [-1, 1]
-            normal[..., 1] *= -1.0
-            normal[..., 2] *= -1.0
-
-            if len(params) > 0:
-                # Undistort to match the (undistorted) image, mirroring the depth path
-                normal = cv2.remap(normal, mapx, mapy, cv2.INTER_LINEAR)
-                normal = normal[y : y + h, x : x + w]
-
-            if self.patch_size is not None:
-                normal = normal[y : y + self.patch_size, x : x + self.patch_size]
-
-            # Renormalize: resize/remap interpolation breaks unit norm
-            norm = np.linalg.norm(normal, axis=-1, keepdims=True)
-            normal = normal / np.clip(norm, 1e-6, None)
-            data["normal_image"] = torch.from_numpy(normal).float()  # [H, W, 3]
+            data["gray_image"] = torch.from_numpy(gray).float().unsqueeze(-1)  # [H, W, 1]
 
         return data

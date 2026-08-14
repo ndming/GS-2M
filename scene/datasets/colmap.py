@@ -1,18 +1,19 @@
-import json
-import os
-from pathlib import Path
-from typing import List, Optional
-
 import cv2
+import json
+
 import imageio.v2 as imageio
 import numpy as np
+
+from pathlib import Path
 from pycolmap import SceneManager
 from tqdm import tqdm
+from typing import List, Optional
 from typing_extensions import assert_never
 
-from .exif import compute_exposure_from_exif
-from .normalize import align_principal_axes, similarity_from_cameras, transform_cameras, transform_points
-from .utils import process_input_images, process_input_normals
+from .utils import (
+    align_principal_axes, similarity_from_cameras, transform_cameras, transform_points,
+    process_input_images, process_input_depths, process_input_normals, compute_exposure_from_exif,
+)
 
 
 class Parser:
@@ -26,7 +27,6 @@ class Parser:
         test_every: int = 8,
         load_exposure: bool = False,
         mask_gt_image: bool = False,
-        reuse_processed_images: bool = False,
         **kwargs,
     ):
         self.data_dir = data_dir
@@ -35,18 +35,14 @@ class Parser:
         self.test_every = test_every
         self.load_exposure = load_exposure
 
-        colmap_dir = os.path.join(data_dir, "sparse/0/")
-        if not os.path.exists(colmap_dir):
-            colmap_dir = os.path.join(data_dir, "sparse")
-        assert os.path.exists(
-            colmap_dir
-        ), f"COLMAP directory {colmap_dir} does not exist."
+        # Set up paths and load COLMAP sparse reconstruction
+        colmap_dir = Path(data_dir) / "sparse" / "0"
+        if not colmap_dir.exists():
+            colmap_dir = Path(data_dir) / "sparse"
+        assert colmap_dir.exists(), f"COLMAP sparse dir does not exist: {colmap_dir}"
 
-        rgb_dir = kwargs.get("colmap_image_dir", "images")
-        image_name_offset = kwargs.get("colmap_image_name_offset", 0)
-
-        # image_path is not being used internally, but specify one anyway to silence warning
-        manager = SceneManager(colmap_dir, image_path=rgb_dir)
+        image_dir = Path(data_dir) / kwargs.get("colmap_image_dir", "images")
+        manager = SceneManager(str(colmap_dir), image_path=str(image_dir))
         manager.load()
 
         # Extract extrinsic matrices in world-to-camera format
@@ -84,7 +80,7 @@ class Parser:
             elif type_ == 1 or type_ == "PINHOLE":
                 params = np.empty(0, dtype=np.float32)
                 camtype = "perspective"
-            if type_ == 2 or type_ == "SIMPLE_RADIAL":
+            elif type_ == 2 or type_ == "SIMPLE_RADIAL":
                 params = np.array([cam.k1, 0.0, 0.0, 0.0], dtype=np.float32)
                 camtype = "perspective"
             elif type_ == 3 or type_ == "RADIAL":
@@ -103,91 +99,82 @@ class Parser:
             params_dict[camera_id] = params
             imsize_dict[camera_id] = (cam.width // factor, cam.height // factor)
             mask_dict[camera_id] = None
-        print(
-            f"[>] COLMAP parser: {len(imdata)} images, taken by {len(set(camera_ids))} cameras"
-        )
 
-        if len(imdata) == 0:
-            raise ValueError("No images found in COLMAP.")
         if not (type_ == 0 or type_ == 1):
-            print("Warning: COLMAP Camera is not PINHOLE. Images have distortion.")
+            print("[!] Warning: COLMAP Camera is not PINHOLE, images have distortion")
 
+        assert len(imdata) > 0, f"No images found in COLMAP sparse dir: {colmap_dir}"
+        print(f"[>] COLMAP parser: {len(imdata)} images, taken by {len(set(camera_ids))} cameras")
+
+        # Convert extrinsics to camera-to-world
         w2c_mats = np.stack(w2c_mats, axis=0)
-
-        # Convert extrinsics to camera-to-world.
         camtoworlds = np.linalg.inv(w2c_mats)
 
         # Image names from COLMAP. No need for permuting the poses according to
         # image names anymore. These are pure file names with suffix (not a path).
         image_names = [imdata[k].name for k in imdata]
-        image_names = [name[image_name_offset:] for name in image_names]
 
-        # Previous Nerf results were generated with images sorted by filename,
+        # Previous NeRF results were generated with images sorted by filename,
         # ensure metrics are reported on the same test set.
         inds = np.argsort(image_names)
         image_names = [image_names[i] for i in inds]
         camtoworlds = camtoworlds[inds]
         camera_ids = [camera_ids[i] for i in inds]
 
-        # Optional frame subsampling.
+        # Optional frame subsampling
         stride = kwargs.get("num_stride_frames", 1)
         if stride > 1:
             image_names = image_names[::stride]
             camtoworlds = camtoworlds[::stride]
             camera_ids = camera_ids[::stride]
 
-        # Load extended metadata. Used by Bilarf dataset.
+        # Load extended metadata, used by Bilarf dataset
         self.extconf = {
             "spiral_radius_scale": 1.0,
             "no_factor_suffix": False,
         }
-        extconf_file = os.path.join(data_dir, "ext_metadata.json")
-        if os.path.exists(extconf_file):
+        extconf_file = Path(data_dir) / "ext_metadata.json"
+        if extconf_file.exists():
             with open(extconf_file) as f:
                 self.extconf.update(json.load(f))
 
-        # Load bounds if possible (only used in forward facing scenes).
+        # Load bounds if possible (only used in forward facing scenes)
         self.bounds = np.array([0.01, 1.0])
-        posefile = os.path.join(data_dir, "poses_bounds.npy")
-        if os.path.exists(posefile):
+        posefile = Path(data_dir) / "poses_bounds.npy"
+        bounds_from_file = posefile.exists()
+        if bounds_from_file:
             self.bounds = np.load(posefile)[:, -2:]
 
-        exposure_bias_ev = kwargs.get("exposure_bias", 0.0)
-        if exposure_bias_ev != 0.0:
-            print(f"[>] Parser: applying exposure bias of {exposure_bias_ev:.1f} EV to input images")
+        # Preprocess input images and depths, redundant if factor = 1
+        processed_image_dir = Path(data_dir) / f"images_{factor}x"
+        reuse_processed_images = kwargs.get("reuse_processed_images", False)
 
-        # Preprocess input images
-        colmap_image_dir = os.path.join(data_dir, rgb_dir)
-        if not os.path.exists(colmap_image_dir):
-            raise ValueError(f"COLMAP image dir {colmap_image_dir} does not exist!")
+        # Automatically pick up masks dir if present, note that masks
+        # here are meant for alpha masking, not fisheye RoI masks
+        mask_dir = Path(data_dir) / kwargs.get("mask_image_dir", "masks")
+        if mask_gt_image and mask_dir.exists():
+            print(f"[>] COLMAP parser: using image masks under {mask_dir}")
+        else:
+            mask_dir = None
 
-        processed_image_dir = Path(colmap_image_dir).parent / f"processed_images_{factor}x_{exposure_bias_ev:.1f}ev"
-        mask_image_dir = Path(colmap_image_dir).parent / "masks"
-        mask_image_dir = mask_image_dir if mask_gt_image and mask_image_dir.exists() else None
+        # Process and store GT images
+        proc_workers = kwargs.get("image_process_workers", None)
         image_paths = process_input_images(
-            colmap_image_dir, str(processed_image_dir), image_names, factor, reuse=reuse_processed_images,
-            mask_image=mask_gt_image, mask_dir=mask_image_dir, exposure_bias=exposure_bias_ev, num_workers=4,
+            image_dir, processed_image_dir, image_names, factor, reuse=reuse_processed_images,
+            mask_image=mask_gt_image, mask_dir=mask_dir, num_workers=proc_workers,
         )
 
-        # Downsampled images may have different names vs images used for COLMAP,
-        # so we need to map between the two sorted lists of files.
-        # Both colmap_files and image_files are file names with suffix.
-        # colmap_files = sorted(_get_rel_paths(colmap_image_dir))
-        # image_files = sorted(_get_rel_paths(processed_image_dir))
-        # colmap_to_image = dict(zip(colmap_files, image_files))
-        # image_paths = [os.path.join(processed_image_dir, colmap_to_image[Path(f).name]) for f in image_names]
-
-        # Preprocess monocular GT normal maps (e.g. from StableNormal), if requested.
-        # Aligned with image_names, so normal_paths[i] matches camtoworlds[i].
-        self.normal_paths = None
-        if kwargs.get("load_image_normal", False):
-            normal_rgb_dir = os.path.join(data_dir, kwargs.get("colmap_normal_dir", "normals"))
-            if not os.path.exists(normal_rgb_dir):
-                raise ValueError(f"GT normal dir {normal_rgb_dir} does not exist!")
-            processed_normal_dir = Path(colmap_image_dir).parent / f"processed_normals_{factor}x"
-            self.normal_paths = process_input_normals(
-                normal_rgb_dir, str(processed_normal_dir), image_names, factor,
-                reuse=reuse_processed_images, num_workers=4,
+        # Pick up depths if provided depth dir name
+        depth_paths = None
+        depth_image_dir = kwargs.get("depth_image_dir", "")
+        if depth_image_dir != "":
+            depth_dir = Path(data_dir) / depth_image_dir
+            assert depth_dir.exists(), depth_dir
+            # Process and store them the same way we did for GT images
+            processed_depth_dir = Path(data_dir) / f"depths_{factor}x"
+            depth_paths = process_input_depths(
+                depth_dir, processed_depth_dir, image_names, factor, reuse=reuse_processed_images,
+                mask_image=mask_gt_image, masked_image_dir=processed_image_dir, num_workers=proc_workers,
             )
 
         # 3D points and {image_name -> [point_idx]}
@@ -206,13 +193,11 @@ class Parser:
             k: np.array(v).astype(np.int32) for k, v in point_indices.items()
         }
 
+        # Apply scene transforms if requested
         transform = np.eye(4)
         if kwargs.get("center_world_space", False):
             # Recenter the world space, preserve all scaling and orientations
             scene_center = np.median(camtoworlds[:, :3, 3], axis=0)
-            if kwargs.get("center_preserve_z", False):
-                scene_center[2] = 0.0
-
             transform[:3, 3] = -scene_center
             camtoworlds = transform_cameras(transform, camtoworlds)
             points = transform_points(transform, points)
@@ -246,20 +231,23 @@ class Parser:
                 transform = T3 @ transform
 
         if kwargs.get("colmap_z_up", False):
-            # COLMAP's native world up is [0, -1, 0]; rotate the scene so up becomes +Z
-            # (a -90 deg rotation about X). Applied after centering (a translation preserves
-            # the axis); do not combine with `normalize`, which reorients to its own axes.
-            up_to_z = np.array(
-                [
-                    [1.0, 0.0, 0.0, 0.0],
-                    [0.0, 0.0, 1.0, 0.0],
-                    [0.0, -1.0, 0.0, 0.0],
-                    [0.0, 0.0, 0.0, 1.0],
-                ]
-            )
-            camtoworlds = transform_cameras(up_to_z, camtoworlds)
-            points = transform_points(up_to_z, points)
-            transform = up_to_z @ transform
+            if normalize:
+                print("[!] Cannot apply COLMAP z-up fix if enabling scene normalization, please remove --normalize_world_space")
+            else:
+                # COLMAP's native world up is [0, -1, 0]; rotate the scene so up becomes +Z
+                # (a -90 deg rotation about X). Applied after centering (a translation preserves
+                # the axis); do not combine with `normalize`, which reorients to its own axes.
+                up_to_z = np.array(
+                    [
+                        [1.0, 0.0, 0.0, 0.0],
+                        [0.0, 0.0, 1.0, 0.0],
+                        [0.0, -1.0, 0.0, 0.0],
+                        [0.0, 0.0, 0.0, 1.0],
+                    ]
+                )
+                camtoworlds = transform_cameras(up_to_z, camtoworlds)
+                points = transform_points(up_to_z, points)
+                transform = up_to_z @ transform
 
         self.image_names = image_names  # List[str], (num_images,)
         self.image_paths = image_paths  # List[str], (num_images,)
@@ -269,12 +257,22 @@ class Parser:
         self.params_dict = params_dict  # Dict of camera_id -> params
         self.imsize_dict = imsize_dict  # Dict of camera_id -> (width, height)
         self.mask_dict   = mask_dict    # Dict of camera_id -> mask
+
         # Sparse SfM points
         self.points = points                # np.ndarray, (num_points, 3)
         self.points_err = points_err        # np.ndarray, (num_points,)
         self.points_rgb = points_rgb        # np.ndarray, (num_points, 3)
         self.point_indices = point_indices  # Dict[str, np.ndarray], image_name -> [M,]
         self.transform = transform          # np.ndarray, (4, 4)
+        if bounds_from_file:
+            # Rescale loaded bounds by the linear scale baked into scane transform,
+            # so near/far stay consistent with the possibly normalized/scaled world.
+            transform_scale = float(np.linalg.norm(transform[:3, 0]))
+            self.bounds = self.bounds * transform_scale
+
+        # Depths supervision
+        self.depth_paths = depth_paths
+        self.depth_scale = kwargs.get("depth_image_scale", 1e-3)
 
         # Create 0-based contiguous camera indices from COLMAP camera_ids.
         # This is useful for camera-based embeddings/modules.
@@ -288,7 +286,7 @@ class Parser:
         if load_exposure:
             exposure_values: List[Optional[float]] = []
             for image_name in tqdm(image_names, desc="[>] Loading EXIF exposure", ncols=128):
-                original_path = Path(colmap_image_dir) / image_name
+                original_path = image_dir / image_name
                 exposure_values.append(compute_exposure_from_exif(original_path))
 
             # Compute mean across all valid exposures and subtract
@@ -316,7 +314,10 @@ class Parser:
         colmap_width, colmap_height = self.imsize_dict[self.camera_ids[0]]
         s_height, s_width = actual_height / colmap_height, actual_width / colmap_width
         if s_height != 1.0 or s_width != 1.0:
-            print(f"[!] Warning: actual image size ({actual_width}x{actual_height}) does not match scaled COLMAP intrinsics ({colmap_width}x{colmap_height})")
+            print(
+                f"[!] Warning: actual image size ({actual_width}x{actual_height}) "
+                f"does not match scaled COLMAP intrinsics ({colmap_width}x{colmap_height})"
+            )
             print(f"[>] Rescaling intrinsics by ({s_width:.2f}x, {s_height:.2f}x)")
         for camera_id, K in self.Ks_dict.items():
             K[0, :] *= s_width
@@ -325,7 +326,7 @@ class Parser:
             width, height = self.imsize_dict[camera_id]
             self.imsize_dict[camera_id] = (int(width * s_width), int(height * s_height))
 
-        # undistortion
+        # Undistortion
         self.mapx_dict = dict()
         self.mapy_dict = dict()
         self.roi_undist_dict = dict()
@@ -394,7 +395,7 @@ class Parser:
             self.imsize_dict[camera_id] = (roi_undist[2], roi_undist[3])
             self.mask_dict[camera_id] = mask
 
-        # size of the scene measured by cameras
+        # Size of the scene measured by cameras
         camera_locations = camtoworlds[:, :3, 3]
         scene_center = np.mean(camera_locations, axis=0)
         dists = np.linalg.norm(camera_locations - scene_center, axis=1)
